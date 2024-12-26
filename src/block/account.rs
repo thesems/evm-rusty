@@ -11,3 +11,14 @@ pub struct Account {
     // hash of the merkle patricia trie of the storage
     pub storage_root: B256,
 }
+
+impl Account {
+    pub fn new() -> Self {
+        Self {
+            nonce: 0,
+            balance: 0,
+            code_hash: B256::ZERO,
+            storage_root: B256::ZERO,
+        }
+    }
+}

@@ -2,18 +2,22 @@
 
 use alloy_primitives::{Address, Keccak256, B256};
 
+pub const TRANSACTION_GAS_COST: u64 = 21000;
+pub const GWEI_TO_WEI: u64 = 1_000_000_000;
+pub const ETH_TO_WEI: u64 = GWEI_TO_WEI * 1_000_000_000;
+
 pub struct Transaction {
-    from: Address,
-    to: Address,
-    signature: B256,
-    nonce: u64,
-    value: u64,
-    input_data: B256,
+    pub from: Address,
+    pub to: Address,
+    pub signature: B256,
+    pub nonce: u64,
+    pub value: u64,
+    pub input_data: B256,
     // the maximum amount of gas units that can be consumed by the transaction.
     // The EVM specifies the units of gas required by each computational step
-    gas_limit: u64,
+    pub gas_limit: u64,
 
-    chain_id: u64,
+    pub chain_id: u64,
 
     // EIP-2930
     // list of addresses and storage keys transaction intends to access
@@ -21,15 +25,37 @@ pub struct Transaction {
 
     // EIP-1559
     // the maximum price of the consumed gas to be included as a tip to the validator
-    max_priority_fee_per_gas: u64,
+    pub max_priority_fee_per_gas: u64,
     // the maximum fee per unit of gas willing to be paid for the transaction (inclusive of baseFeePerGas and maxPriorityFeePerGas)
-    max_fee_per_gas: u64,
+    pub max_fee_per_gas: u64,
 }
 
 impl Transaction {
+    pub fn new(
+        from: Address,
+        to: Address,
+        value: u64,
+        gas_limit: u64,
+        max_priority_fee_per_gas: u64,
+        max_fee_per_gas: u64,
+    ) -> Self {
+        Self {
+            from,
+            to,
+            value,
+            signature: Default::default(),
+            nonce: 0,
+            input_data: Default::default(),
+            gas_limit,
+            chain_id: 0,
+            max_priority_fee_per_gas,
+            max_fee_per_gas,
+        }
+    }
+
     // Calculate the hash that will be signed
     // This follows EIP-2718 and EIP-1559 transaction format
-    fn hash_for_signing(&self) -> B256 {
+    pub fn hash_for_signing(&self) -> B256 {
         let mut hasher = Keccak256::new();
 
         // We use RLP encoding in practice, but for simplicity, we'll just concatenate fields

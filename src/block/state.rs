@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use alloy_primitives::{Address, B256};
 
 use crate::block::account::Account;
+use crate::transaction::errors::TransactionError;
+use crate::transaction::transaction::Transaction;
+use crate::transaction::transaction::TRANSACTION_GAS_COST;
 
 pub struct State {
     pub accounts: HashMap<Address, Account>,
@@ -38,33 +41,47 @@ impl State {
 
     pub fn process_transaction(
         &mut self,
-        from: Address,
-        to: Address,
-        value: u64,
-    ) -> Result<(), &'static str> {
+        transaction: &Transaction,
+        base_fee: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Get sender account
         let sender = self
             .accounts
-            .get_mut(&from)
-            .ok_or("Sender account doesn't exist")?;
+            .get_mut(&transaction.from)
+            .ok_or(Box::new(TransactionError::SenderAccountDoesNotExist))?;
+
+        if base_fee > transaction.max_fee_per_gas {
+            return Err(Box::new(TransactionError::MaximumGasFeeBelowBaseFee));
+        }
+
+        let total_fee = TRANSACTION_GAS_COST
+            * transaction
+                .max_fee_per_gas
+                .min(base_fee + transaction.max_priority_fee_per_gas);
+
+        if transaction.gas_limit < TRANSACTION_GAS_COST {
+            return Err(Box::new(TransactionError::InsufficientGas));
+        }
 
         // Check balance
-        if sender.balance < value {
-            return Err("Insufficient balance");
+        if sender.balance < transaction.value + total_fee {
+            return Err(Box::new(TransactionError::InsufficientBalance));
         }
 
         // Deduct from sender
-        sender.balance -= value;
-        sender.nonce += 1; // Increment nonce for each transaction
+        sender.balance -= (transaction.value + total_fee);
+        sender.nonce += 1;
 
         // Credit recipient (create account if it doesn't exist)
-        let recipient = self.accounts.entry(to).or_insert(Account {
+        let recipient = self.accounts.entry(transaction.to).or_insert(Account {
             nonce: 0,
             balance: 0,
-            code_hash: B256::ZERO, // Empty account has zero code hash
+            code_hash: B256::ZERO,
             storage_root: B256::ZERO,
         });
-        recipient.balance += value;
+
+        // Credit receiver
+        recipient.balance += transaction.value;
 
         Ok(())
     }

@@ -208,7 +208,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_vm() {
+    fn test_add() {
         let code = vec![
             Operation::Push1(U256::from(1)),
             Operation::Push1(U256::from(1)),
