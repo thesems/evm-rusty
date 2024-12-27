@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
-use alloy_primitives::{Address, B256};
-
 use crate::block::account::Account;
 use crate::transaction::errors::TransactionError;
 use crate::transaction::transaction::Transaction;
 use crate::transaction::transaction::TRANSACTION_GAS_COST;
+use alloy_primitives::{Address, B256};
 
 pub struct State {
     pub accounts: HashMap<Address, Account>,
@@ -63,13 +62,18 @@ impl State {
             return Err(Box::new(TransactionError::InsufficientGas));
         }
 
+        // Verify signature
+        if !transaction.verify_signature() {
+            return Err(Box::new(TransactionError::InvalidSignature));
+        }
+
         // Check balance
         if sender.balance < transaction.value + total_fee {
             return Err(Box::new(TransactionError::InsufficientBalance));
         }
 
-        // Deduct from sender
-        sender.balance -= (transaction.value + total_fee);
+        // Deduct from snder
+        sender.balance -= transaction.value + total_fee;
         sender.nonce += 1;
 
         // Credit recipient (create account if it doesn't exist)
@@ -84,5 +88,68 @@ impl State {
         recipient.balance += transaction.value;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::block::account::Account;
+    use crate::crypto::wallet::{EthereumWallet, Wallet};
+    use crate::transaction::transaction::{Transaction, ETH_TO_WEI, TRANSACTION_GAS_COST};
+    use k256::{
+        ecdsa::{signature::Signer, Signature, SigningKey},
+        SecretKey,
+    };
+
+    #[test]
+    fn test_transaction_basic() {
+        let eth_wallet_sender = EthereumWallet::generate();
+        let eth_wallet_receiver = EthereumWallet::generate();
+
+        let mut state = State::new();
+
+        {
+            assert!(state.get_account(&eth_wallet_receiver.address).is_none());
+            assert!(state.get_account(&eth_wallet_sender.address).is_none());
+        }
+        {
+            state.set_account(eth_wallet_sender.address.clone(), Account::new());
+            let mut sender = state.get_account(&eth_wallet_sender.address).unwrap();
+
+            // transaction cost + base fee + priority fee
+            sender.balance = 3 * ETH_TO_WEI;
+        }
+
+        let mut tx = Transaction::new(
+            eth_wallet_sender.address.clone(),
+            eth_wallet_receiver.address.clone(),
+            ETH_TO_WEI,
+            TRANSACTION_GAS_COST,
+            2_000_000_000,  // 2 Gwei max tip
+            12_000_000_000, // 12 Gwei max total (base + priority)
+        );
+
+        tx.sign(&eth_wallet_sender.private_key);
+
+        let base_fee = 10;
+        state.process_transaction(&tx, base_fee).unwrap();
+
+        let sender_balance = state
+            .get_account(&eth_wallet_sender.address)
+            .unwrap()
+            .balance;
+        let recv_balance = state
+            .get_account(&eth_wallet_receiver.address)
+            .unwrap()
+            .balance;
+        let sender_nonce = state.get_account(&eth_wallet_sender.address).unwrap().nonce;
+
+        assert_eq!(sender_nonce, 1);
+        assert_eq!(
+            sender_balance,
+            2 * ETH_TO_WEI - (TRANSACTION_GAS_COST * (base_fee + 2_000_000_000))
+        );
+        assert_eq!(recv_balance, ETH_TO_WEI);
     }
 }

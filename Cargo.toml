@@ -23,4 +23,4 @@ path = "src/bin/node.rs"
 
 [[bin]]
 name = "new_wallet"
-path = "src/bin/new_wallet.rs"
+path = "src/bin/create_wallet.rs"

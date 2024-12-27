@@ -7,15 +7,14 @@ pub trait Wallet {
     fn generate() -> Self;
     fn get_private_key(&self) -> String;
     fn get_public_key(&self) -> String;
-    fn get_address_as_hex(&self) -> String;
-    fn get_address(&self) -> &Address;
+    fn get_address(&self) -> String;
 }
 
 /// Struct representing an Ethereum Wallet
 pub struct EthereumWallet {
-    private_key: SigningKey,
-    public_key: VerifyingKey,
-    eth_address: Address,
+    pub private_key: SigningKey,
+    pub public_key: VerifyingKey,
+    pub address: Address,
 }
 
 impl Wallet for EthereumWallet {
@@ -34,7 +33,7 @@ impl Wallet for EthereumWallet {
         EthereumWallet {
             private_key: signing_key,
             public_key: verifying_key,
-            eth_address,
+            address: eth_address,
         }
     }
 
@@ -51,12 +50,7 @@ impl Wallet for EthereumWallet {
     }
 
     /// Retrieve the Ethereum address as a hexadecimal string
-    fn get_address_as_hex(&self) -> String {
-        self.eth_address.to_string()
-    }
-
-    /// Retrieve the Ethereum address
-    fn get_address(&self) -> &Address {
-        &self.eth_address
+    fn get_address(&self) -> String {
+        self.address.to_string()
     }
 }

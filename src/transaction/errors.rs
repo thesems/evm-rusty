@@ -10,4 +10,6 @@ pub enum TransactionError {
     InsufficientGas,
     #[error("maximum gas fee below base fee")]
     MaximumGasFeeBelowBaseFee,
+    #[error("invalid transaction signature")]
+    InvalidSignature,
 }
