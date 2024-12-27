@@ -2,13 +2,19 @@ use std::collections::HashMap;
 
 use crate::block::account::Account;
 use crate::transaction::errors::TransactionError;
-use crate::transaction::transaction::Transaction;
-use crate::transaction::transaction::TRANSACTION_GAS_COST;
+use crate::transaction::transaction_eip1559::TransactionEip1559;
+use crate::transaction::transaction_eip1559::TRANSACTION_GAS_COST;
 use alloy_primitives::{Address, B256};
 
 pub struct State {
     pub accounts: HashMap<Address, Account>,
     pub storage: HashMap<(Address, B256), B256>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl State {
@@ -40,14 +46,17 @@ impl State {
 
     pub fn process_transaction(
         &mut self,
-        transaction: &Transaction,
+        transaction: &TransactionEip1559,
         base_fee: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get sender account
         let sender = self
             .accounts
-            .get_mut(&transaction.from)
-            .ok_or(Box::new(TransactionError::SenderAccountDoesNotExist))?;
+            .get_mut(
+                &transaction
+                    .get_sender_address()
+                    .ok_or(Box::new(TransactionError::InvalidTransaction))?)
+                    .ok_or(Box::new(TransactionError::SenderAccountDoesNotExist))?;
 
         if base_fee > transaction.max_fee_per_gas {
             return Err(Box::new(TransactionError::MaximumGasFeeBelowBaseFee));
@@ -55,8 +64,8 @@ impl State {
 
         let total_fee = TRANSACTION_GAS_COST
             * transaction
-                .max_fee_per_gas
-                .min(base_fee + transaction.max_priority_fee_per_gas);
+            .max_fee_per_gas
+            .min(base_fee + transaction.max_priority_fee_per_gas);
 
         if transaction.gas_limit < TRANSACTION_GAS_COST {
             return Err(Box::new(TransactionError::InsufficientGas));
@@ -95,17 +104,16 @@ impl State {
 mod tests {
     use super::*;
     use crate::block::account::Account;
-    use crate::crypto::wallet::{EthereumWallet, Wallet};
-    use crate::transaction::transaction::{Transaction, ETH_TO_WEI, TRANSACTION_GAS_COST};
-    use k256::{
-        ecdsa::{signature::Signer, Signature, SigningKey},
-        SecretKey,
+    use crate::crypto::wallet::Wallet;
+    use crate::transaction::transaction_eip1559::{
+        TransactionEip1559, ETH_TO_WEI, TRANSACTION_GAS_COST,
     };
+    use k256::ecdsa::signature::Signer;
 
     #[test]
     fn test_transaction_basic() {
-        let eth_wallet_sender = EthereumWallet::generate();
-        let eth_wallet_receiver = EthereumWallet::generate();
+        let eth_wallet_sender = Wallet::generate();
+        let eth_wallet_receiver = Wallet::generate();
 
         let mut state = State::new();
 
@@ -114,16 +122,15 @@ mod tests {
             assert!(state.get_account(&eth_wallet_sender.address).is_none());
         }
         {
-            state.set_account(eth_wallet_sender.address.clone(), Account::new());
-            let mut sender = state.get_account(&eth_wallet_sender.address).unwrap();
+            state.set_account(eth_wallet_sender.address, Account::new());
+            let sender = state.get_account(&eth_wallet_sender.address).unwrap();
 
             // transaction cost + base fee + priority fee
             sender.balance = 3 * ETH_TO_WEI;
         }
 
-        let mut tx = Transaction::new(
-            eth_wallet_sender.address.clone(),
-            eth_wallet_receiver.address.clone(),
+        let mut tx = TransactionEip1559::new(
+            eth_wallet_receiver.address,
             ETH_TO_WEI,
             TRANSACTION_GAS_COST,
             2_000_000_000,  // 2 Gwei max tip

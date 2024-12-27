@@ -1,4 +1,4 @@
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::U256;
 
 // Gas cost calculation helper structs
 pub struct GasCost {

@@ -1,11 +1,10 @@
-use alloy_primitives::{Address, B256};
+use alloy_primitives::B256;
 use std::sync::{Arc, Mutex};
 
 use crate::block::block::Block;
 use crate::block::state::State;
-use crate::crypto::wallet::EthereumWallet;
 use crate::crypto::wallet::Wallet;
-use crate::transaction::transaction::Transaction;
+use crate::transaction::transaction_eip1559::TransactionEip1559;
 
 pub trait Blockchain {
     fn run(&mut self);
@@ -15,13 +14,19 @@ pub trait Blockchain {
 
 pub struct App {
     state: Arc<Mutex<State>>,
-    tx_send: std::sync::mpsc::Sender<Transaction>,
-    tx_recv: std::sync::mpsc::Receiver<Transaction>,
-    account: EthereumWallet,
+    tx_send: std::sync::mpsc::Sender<TransactionEip1559>,
+    tx_recv: std::sync::mpsc::Receiver<TransactionEip1559>,
+    account: Wallet,
     running: bool,
     blocks: Vec<Block>,
     slot: u64,
     base_fee: u64,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl App {
@@ -32,7 +37,7 @@ impl App {
             state: Arc::new(Mutex::new(State::new())),
             tx_send,
             tx_recv,
-            account: EthereumWallet::generate(),
+            account: Wallet::generate(),
             running: true,
             blocks: vec![],
             slot: 0,

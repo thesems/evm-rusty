@@ -12,6 +12,12 @@ pub struct Account {
     pub storage_root: B256,
 }
 
+impl Default for Account {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Account {
     pub fn new() -> Self {
         Self {
