@@ -1,8 +1,8 @@
 use clap::Parser;
 use std::env;
-use su_chain::blockchain::{App, Blockchain};
-use su_chain::config::loader::load_toml;
-use su_chain::config::models::Config;
+use rusty_evm::blockchain::{App, Blockchain};
+use rusty_evm::config::loader::load_toml;
+use rusty_evm::config::models::Config;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]

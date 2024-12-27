@@ -1,6 +1,6 @@
-# Su Chain
+# Rusty EVM
 
-Su Chain is an educational project designed to recreate a simplified Ethereum-like blockchain. Its primary focus is on
+EVM is an educational project designed to recreate a simplified Ethereum-like blockchain. Its primary focus is on
 providing a deeper understanding of the **Ethereum Virtual Machine (EVM)**, **Ethereum Improvement Proposals (EIPs)**,
 and the broader concepts related to the execution layer of blockchains. This project aims to demystify how Ethereum
 operates under the hood, making it a helpful resource for developers and blockchain enthusiasts interested in the
