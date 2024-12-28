@@ -1,4 +1,4 @@
-use su_chain::crypto::wallet::Wallet;
+use rusty_evm::crypto::wallet::Wallet;
 
 fn main() {
     // Use Wallet trait to create a new Ethereum wallet

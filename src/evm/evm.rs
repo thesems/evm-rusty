@@ -1,6 +1,6 @@
+use crate::evm::evm::VMError::{NoItemsOnStack, NotEnoughItemsOnStack, StackFull};
 use crate::evm::operation::Operation;
 use alloy_primitives::U256;
-use crate::evm::evm::VMError::{NoItemsOnStack, NotEnoughItemsOnStack, StackFull};
 
 const MAX_STACK_SIZE: u32 = 1024;
 
@@ -208,7 +208,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add() {
+    fn test_add_operation() {
         let code = vec![
             Operation::Push1(U256::from(1)),
             Operation::Push1(U256::from(1)),
