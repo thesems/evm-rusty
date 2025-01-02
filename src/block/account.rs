@@ -14,17 +14,17 @@ pub struct Account {
 
 impl Default for Account {
     fn default() -> Self {
-        Self::new()
+        Self::new(0, B256::ZERO, B256::ZERO)
     }
 }
 
 impl Account {
-    pub fn new() -> Self {
+    pub fn new(balance: u64, code_hash: B256, storage_root: B256) -> Self {
         Self {
             nonce: 0,
-            balance: 0,
-            code_hash: B256::ZERO,
-            storage_root: B256::ZERO,
+            balance,
+            code_hash,
+            storage_root,
         }
     }
 }

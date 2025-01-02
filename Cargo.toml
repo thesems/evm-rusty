@@ -16,6 +16,8 @@ clap = { version = "4.5.23", features = ["derive"] }
 serde = { version = "1.0.216", features = ["derive"] }
 serde_json = "1.0.134"
 thiserror = "2.0.9"
+strum_macros = "0.26.4"
+alloy-rlp = { version = "0.3.10", features = ["derive"] }
 
 [[bin]]
 name = "node"

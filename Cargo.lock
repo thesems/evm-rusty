@@ -60,8 +60,20 @@ version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f542548a609dca89fcd72b3b9f355928cf844d4363c5eed9c5273a3dd225e097"
 dependencies = [
+ "alloy-rlp-derive",
  "arrayvec",
  "bytes",
+]
+
+[[package]]
+name = "alloy-rlp-derive"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a833d97bf8a5f0f878daf2c8451fff7de7f9de38baa5a45d936ec718d81255a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.91",
 ]
 
 [[package]]
@@ -1290,10 +1302,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustversion"
+version = "1.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c45b9784283f1b2e7fb61b42047c2fd678ef0960d4f6f1eba131594cc369d4"
+
+[[package]]
 name = "rusty-evm"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "alloy-rlp",
  "clap",
  "color-eyre",
  "dotenv",
@@ -1303,6 +1322,7 @@ dependencies = [
  "rand_core",
  "serde",
  "serde_json",
+ "strum_macros",
  "thiserror",
  "toml",
 ]
@@ -1481,6 +1501,19 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum_macros"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.91",
+]
 
 [[package]]
 name = "subtle"

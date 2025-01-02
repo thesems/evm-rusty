@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, B256};
 
-use crate::transaction::transaction_eip1559::TransactionEip1559;
+use crate::transaction::transaction::Transaction;
 
 struct AttestationData {
     slot: u64,
@@ -39,7 +39,7 @@ struct ExecutionPayload {
     extra_data: Vec<u8>,
     base_fee_per_gas: u64,
     block_hash: B256,
-    transactions: Vec<TransactionEip1559>,
+    transactions: Vec<Transaction>,
     withdrawals: Vec<Withdrawal>,
 }
 
@@ -84,7 +84,7 @@ impl Block {
     }
 
     /// Adds a transaction to the block's execution payload.
-    pub fn add_transaction(&mut self, transaction: TransactionEip1559) {
+    pub fn add_transaction(&mut self, transaction: Transaction) {
         self.body.execution_payload.transactions.push(transaction);
     }
 

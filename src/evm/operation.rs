@@ -1,4 +1,13 @@
 use alloy_primitives::U256;
+use strum_macros::FromRepr;
+
+#[derive(Debug)]
+pub enum OperationError {
+    InvalidOpcodeFormat,
+    InvalidPush,
+    PushOpNeedsData,
+    UnknownOpcode,
+}
 
 // Gas cost calculation helper structs
 pub struct GasCost {
@@ -13,10 +22,11 @@ pub struct StackReq {
     pub stack_outputs: u32,    // Number of items pushed to stack
 }
 
-#[derive(Debug, Clone)]
+#[repr(u8)]
+#[derive(FromRepr, Debug, Clone)]
 pub enum Operation {
     // 0x00 - 0x0f: Stop and Arithmetic
-    Stop,
+    Stop = 0x0,
     Add,
     Mul,
     Sub,
@@ -30,7 +40,7 @@ pub enum Operation {
     SignExtend,
 
     // 0x10 - 0x1f: Comparison & Bitwise Logic
-    Lt,
+    Lt = 0x10,
     Gt,
     Slt,
     Sgt,
@@ -46,7 +56,7 @@ pub enum Operation {
     Sar,
 
     // 0x30 - 0x3f: Environmental Information
-    Address,
+    Address = 0x30,
     Balance,
     Origin,
     Caller,
@@ -64,7 +74,7 @@ pub enum Operation {
     ExtCodeHash,
 
     // 0x40 - 0x4f: Block Information
-    BlockHash,
+    BlockHash = 0x40,
     Coinbase,
     Timestamp,
     Number,
@@ -75,7 +85,7 @@ pub enum Operation {
     BaseFee,
 
     // 0x50 - 0x5f: Stack, Memory, Storage and Flow
-    Pop,
+    Pop = 0x50,
     MLoad,
     MStore,
     MStore8,
@@ -89,7 +99,7 @@ pub enum Operation {
     JumpDest,
 
     // 0x60 - 0x7f: Push Operations
-    Push1(U256),
+    Push1(U256) = 0x60,
     Push2(U256),
     Push3(U256),
     Push4(U256),
@@ -123,10 +133,10 @@ pub enum Operation {
     Push32(U256),
 
     // 0x80 - 0x8f: Duplication Operations 1-16
-    Dup(u8),
+    Dup(u8) = 0x80,
 
     // 0x90 - 0x9f: Exchange Operations
-    Swap1,
+    Swap1 = 0x90,
     Swap2,
     Swap3,
     Swap4,
@@ -144,14 +154,14 @@ pub enum Operation {
     Swap16,
 
     // 0xa0 - 0xaf: Logging Operations
-    Log0,
+    Log0 = 0xa0,
     Log1,
     Log2,
     Log3,
     Log4,
 
     // 0xf0 - 0xff: System Operations
-    Create,
+    Create = 0xf0,
     Call,
     CallCode,
     Return,
@@ -165,80 +175,16 @@ pub enum Operation {
 
 impl Operation {
     // Convert a byte to Operation
-    pub fn from_byte(byte: u8, data: Option<U256>) -> Result<Self, String> {
+    pub fn from_byte(byte: u8, data: Option<U256>) -> Result<Self, OperationError> {
         match byte {
-            // 0x00 - 0x0f: Stop and Arithmetic
-            0x00 => Ok(Operation::Stop),
-            0x01 => Ok(Operation::Add),
-            0x02 => Ok(Operation::Mul),
-            0x03 => Ok(Operation::Sub),
-            0x04 => Ok(Operation::Div),
-            0x05 => Ok(Operation::SDiv),
-            0x06 => Ok(Operation::Mod),
-            0x07 => Ok(Operation::SMod),
-            0x08 => Ok(Operation::AddMod),
-            0x09 => Ok(Operation::MulMod),
-            0x0a => Ok(Operation::Exp),
-            0x0b => Ok(Operation::SignExtend),
-
-            // 0x10 - 0x1f: Comparison & Bitwise Logic
-            0x10 => Ok(Operation::Lt),
-            0x11 => Ok(Operation::Gt),
-            0x12 => Ok(Operation::Slt),
-            0x13 => Ok(Operation::Sgt),
-            0x14 => Ok(Operation::Eq),
-            0x15 => Ok(Operation::IsZero),
-            0x16 => Ok(Operation::And),
-            0x17 => Ok(Operation::Or),
-            0x18 => Ok(Operation::Xor),
-            0x19 => Ok(Operation::Not),
-            0x1a => Ok(Operation::Byte),
-            0x1b => Ok(Operation::Shl),
-            0x1c => Ok(Operation::Shr),
-            0x1d => Ok(Operation::Sar),
-
-            // 0x30 - 0x3f: Environmental Information
-            0x30 => Ok(Operation::Address),
-            0x31 => Ok(Operation::Balance),
-            0x32 => Ok(Operation::Origin),
-            0x33 => Ok(Operation::Caller),
-            0x34 => Ok(Operation::CallValue),
-            0x35 => Ok(Operation::CallDataLoad),
-            0x36 => Ok(Operation::CallDataSize),
-            0x37 => Ok(Operation::CallDataCopy),
-            0x38 => Ok(Operation::CodeSize),
-            0x39 => Ok(Operation::CodeCopy),
-            0x3a => Ok(Operation::GasPrice),
-            0x3b => Ok(Operation::ExtCodeSize),
-            0x3c => Ok(Operation::ExtCodeCopy),
-            0x3d => Ok(Operation::ReturnDataSize),
-            0x3e => Ok(Operation::ReturnDataCopy),
-            0x3f => Ok(Operation::ExtCodeHash),
-
-            // 0x40 - 0x4f: Block Information
-            0x40 => Ok(Operation::BlockHash),
-            0x41 => Ok(Operation::Coinbase),
-            0x42 => Ok(Operation::Timestamp),
-            0x43 => Ok(Operation::Number),
-            0x44 => Ok(Operation::Difficulty),
-            0x45 => Ok(Operation::GasLimit),
-            0x46 => Ok(Operation::ChainId),
-            0x47 => Ok(Operation::SelfBalance),
-            0x48 => Ok(Operation::BaseFee),
-
-            // 0x50 - 0x5f: Stack, Memory, Storage and Flow
-            0x50 => Ok(Operation::Pop),
-            0x51 => Ok(Operation::MLoad),
-            0x52 => Ok(Operation::MStore),
-            0x53 => Ok(Operation::MStore8),
-            0x54 => Ok(Operation::SLoad),
-            0x55 => Ok(Operation::SStore),
-            0x56 => Ok(Operation::Jump),
-            0x57 => Ok(Operation::JumpI),
-            0x58 => Ok(Operation::PC),
-            0x59 => Ok(Operation::MSize),
-            0x5a => Ok(Operation::Gas),
-            0x5b => Ok(Operation::JumpDest),
+            // // 0x00 - 0x0f: Stop and Arithmetic
+            // // 0x10 - 0x1f: Comparison & Bitwise Logic
+            // // 0x30 - 0x3f: Environmental Information
+            // // 0x40 - 0x4f: Block Information
+            // // 0x50 - 0x5f: Stack, Memory, Storage and Flow
+            n @ 0x00..0x5f | n @ 0x90..0x9f => {
+                Ok(Operation::from_repr(n).ok_or(OperationError::InvalidOpcodeFormat)?)
+            }
 
             // Push operations (0x60 - 0x7f)
             n @ 0x60..=0x7f => {
@@ -277,23 +223,23 @@ impl Operation {
                         29 => Operation::Push30(value),
                         30 => Operation::Push31(value),
                         31 => Operation::Push32(value),
-                        _ => return Err("Invalid push operation".to_string()),
+                        _ => return Err(OperationError::InvalidPush),
                     }),
-                    None => Err("Push operation requires data".to_string()),
+                    None => Err(OperationError::PushOpNeedsData),
                 }
             }
 
             // Dup operations (0x80 - 0x8f)
             n @ 0x80..=0x8f => Ok(Operation::Dup((n - 0x80 + 1) as u8)),
 
-            // Swap operations (0x90 - 0x9f)
-            0x90 => Ok(Operation::Swap1),
-            0x91 => Ok(Operation::Swap2),
-            // ... add all swap operations
-            0x9f => Ok(Operation::Swap16),
+            _ => Err(OperationError::UnknownOpcode),
+            // // Swap operations (0x90 - 0x9f)
+            // 0x90 => Ok(Operation::Swap1),
+            // 0x91 => Ok(Operation::Swap2),
+            // // ... add all swap operations
+            // 0x9f => Ok(Operation::Swap16),
 
             // Add remaining operations...
-            _ => Err(format!("Unknown opcode: 0x{:02x}", byte)),
         }
     }
 
@@ -495,18 +441,11 @@ impl Operation {
         }
     }
 
-    // Get opcode (byte representation)
-    pub fn opcode(&self) -> u8 {
-        match self {
-            Operation::Stop => 0x00,
-            Operation::Add => 0x01,
-            Operation::Mul => 0x02,
-            Operation::Sub => 0x03,
-            Operation::Div => 0x04,
-            Operation::SStore => 0x55,
-            Operation::SLoad => 0x54,
-            // ... Add more as needed
-            _ => 0x00, // Default, should implement for all opcodes
-        }
+    fn opcode(&self) -> u8 {
+        // SAFETY: This is safe because:
+        // 1. The enum is #[repr(u8)]
+        // 2. We're only reading the discriminant, not the associated data
+        // 3. The size of u8 matches the repr
+        unsafe { *(self as *const Operation as *const u8) }
     }
 }

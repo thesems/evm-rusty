@@ -1,9 +1,25 @@
-use crate::evm::operation::Operation;
+use std::fs;
+use crate::evm::operation::{Operation, OperationError};
 use alloy_primitives::U256;
+
+#[derive(Debug)]
+pub enum ParserError {
+    IncompletePush,
+    InvalidOpcode,
+}
+
+impl From<OperationError> for ParserError {
+    fn from(err: OperationError) -> Self {
+        match err {
+            _ => ParserError::InvalidOpcode,
+        }
+    }
+}
+
 
 // Structure to handle bytecode parsing
 pub struct BytecodeParser {
-    bytecode: Vec<u8>,
+    pub bytecode: Vec<u8>,
     pc: usize,
 }
 
@@ -12,7 +28,12 @@ impl BytecodeParser {
         Self { bytecode, pc: 0 }
     }
 
-    fn compile(&mut self) -> Result<Vec<Operation>, String> {
+    pub fn from(filepath: &str) -> Result<Self, std::io::Error> {
+        let bytecode = fs::read(filepath)?;
+        Ok(Self { bytecode, pc: 0 })
+    }
+
+    pub fn compile(&mut self) -> Result<Vec<Operation>, ParserError> {
         let mut operations = Vec::new();
         while let Some(operation) = self.next_operation()? {
             operations.push(operation);
@@ -20,7 +41,7 @@ impl BytecodeParser {
         Ok(operations)
     }
 
-    fn next_operation(&mut self) -> Result<Option<Operation>, String> {
+    fn next_operation(&mut self) -> Result<Option<Operation>, ParserError> {
         if self.pc >= self.bytecode.len() {
             return Ok(None);
         }
@@ -32,7 +53,7 @@ impl BytecodeParser {
             n @ 0x60..=0x7f => {
                 let bytes_to_read = (n - 0x60 + 1) as usize;
                 if self.pc + bytes_to_read >= self.bytecode.len() {
-                    return Err("Incomplete push operation".to_string());
+                    return Err(ParserError::IncompletePush);
                 }
 
                 // Read the specified number of bytes

@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use crate::block::block::Block;
 use crate::block::state::State;
 use crate::crypto::wallet::Wallet;
-use crate::transaction::transaction_eip1559::TransactionEip1559;
+use crate::evm::executor::Executor;
+use crate::transaction::transaction::Transaction;
 
 pub trait Blockchain {
     fn run(&mut self);
@@ -14,8 +15,8 @@ pub trait Blockchain {
 
 pub struct App {
     state: Arc<Mutex<State>>,
-    tx_send: std::sync::mpsc::Sender<TransactionEip1559>,
-    tx_recv: std::sync::mpsc::Receiver<TransactionEip1559>,
+    tx_send: std::sync::mpsc::Sender<Transaction>,
+    tx_recv: std::sync::mpsc::Receiver<Transaction>,
     account: Wallet,
     running: bool,
     blocks: Vec<Block>,
@@ -74,13 +75,7 @@ impl Blockchain for App {
 
     fn execute_transactions(&mut self) {
         if let Ok(tx) = self.tx_recv.try_recv() {
-            if self
-                .state
-                .lock()
-                .unwrap()
-                .process_transaction(&tx, self.base_fee)
-                .is_err()
-            {
+            if Executor::process_transaction(&tx, self.base_fee, self.state.clone()).is_err() {
                 log::error!("Transaction failed.");
             };
         }
