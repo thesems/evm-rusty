@@ -6,14 +6,25 @@ use crate::evm::operation::Operation;
 use crate::transaction::transaction::Transaction;
 use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
 
+use crate::crypto::hash::{hash_slice_to_b256, hash_string_to_u256};
 use alloy_primitives::{keccak256, Address, B256, U256};
 use clap::builder::TypedValueParser;
 use k256::pkcs8::der::Encode;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use crate::crypto::hash::{hash_slice_to_b256, hash_string_to_u256};
 
 const MAX_STACK_SIZE: u32 = 1024;
+
+pub enum ExecutionResult {
+    Success {
+        return_data: Option<Vec<u8>>,
+        gas_used: u64,
+    },
+    Revert {
+        reason: Vec<u8>,
+        gas_used: u64,
+    }
+}
 
 #[derive(Debug, RlpEncodable, RlpDecodable, PartialEq)]
 pub struct AddressNonce {
@@ -24,12 +35,14 @@ pub struct AddressNonce {
 #[derive(Debug)]
 pub enum VMError {
     StackFull,
-    NotEnoughItemsOnStack,
+    NotEnoughItemsOnStack(String),
     NoItemsOnStack,
     NotImplemented,
     ContractNotFound,
     InvalidTransaction,
     InvalidBytecode,
+    OutOfGas,
+    StackUnderflow,
 }
 impl From<ParserError> for VMError {
     fn from(value: ParserError) -> Self {
@@ -79,28 +92,57 @@ pub struct VM {
     stack: Vec<U256>,
     memory: Vec<u8>,
     contract: Contract,
-    available_gas: u64,
+    gas_available: u64,
     context: ExecutionContext,
+    creation_offset: usize,
     pc: usize,
     state: Arc<Mutex<State>>,
 }
 
 impl VM {
     pub fn new(contract: Contract, context: ExecutionContext, state: Arc<Mutex<State>>) -> Self {
+        // Find the runtime code start (look for 0xf3 0xfe sequence)
+        let creation_offset = contract
+            .code
+            .iter()
+            .map(|op| op.opcode())
+            .collect::<Vec<u8>>()
+            .windows(2)
+            .position(|window| window == [0xf3, 0xfe])
+            .map(|pos| pos + 2) // Skip past the f3 fe
+            .unwrap_or(0); // If not found, assume it's all runtime code
+
         Self {
             stack: Vec::new(),
             memory: vec![],
             contract,
-            available_gas: context.gas,
+            gas_available: context.gas,
             context,
+            creation_offset,
             pc: 0,
             state,
         }
     }
 
+    fn load_into_memory(&mut self, offset: usize, value: U256) {
+        let bytes = value.to_be_bytes::<32>();
+        if self.memory.len() < offset + 32 {
+            self.memory.resize(offset + 32, 0);
+        }
+        self.memory[offset..offset + 32].copy_from_slice(&bytes);
+    }
+
+    fn read_from_memory(&mut self, offset: usize, length: usize) -> &[u8] {
+        if self.memory.len() < offset + length {
+            self.memory.resize(offset + length, 0);
+        }
+        &self.memory[offset..offset + length]
+    }
+
     pub fn execute_operations(&mut self, code: Vec<Operation>) -> Result<(), VMError> {
-        for i in 0..code.len() {
-            self.process_operation(i)?;
+        while self.pc < code.len() {
+            self.process_operation(self.pc)?;
+            self.pc += 1;
         }
         Ok(())
     }
@@ -116,7 +158,11 @@ impl VM {
 
     fn generate_contract_address(&self, address: Address, nonce: u64) -> Address {
         let mut buffer = Vec::<u8>::new();
-        AddressNonce { address: address.0.as_slice().to_vec(), nonce }.encode(&mut buffer);
+        AddressNonce {
+            address: address.0.as_slice().to_vec(),
+            nonce,
+        }
+        .encode(&mut buffer);
         let hash = keccak256(&buffer);
         Address::from_slice(&hash[12..])
     }
@@ -125,7 +171,9 @@ impl VM {
         let sender = transaction
             .get_sender_address()
             .ok_or(VMError::InvalidTransaction)?;
+
         let contract_address = self.generate_contract_address(sender, transaction.nonce);
+        self.context.address = contract_address;
 
         self.state.lock().unwrap().accounts.insert(
             contract_address,
@@ -136,14 +184,6 @@ impl VM {
             ),
         );
 
-        self.context = ExecutionContext::new(
-            transaction.get_sender_address().unwrap(),
-            contract_address,
-            transaction.value,
-            transaction.input_data.clone(),
-            transaction.gas_limit,
-        );
-
         let mut parser = BytecodeParser::new(transaction.input_data.clone());
         match parser.compile() {
             Ok(code) => self.execute_operations(code),
@@ -152,14 +192,6 @@ impl VM {
     }
 
     pub fn call_contract(&mut self, transaction: Transaction) -> Result<(), VMError> {
-        self.context = ExecutionContext::new(
-            transaction.get_sender_address().unwrap(),
-            transaction.to,
-            transaction.value,
-            transaction.input_data.clone(),
-            transaction.gas_limit,
-        );
-
         // extract function selector
         let selector = &transaction.input_data[0..4];
 
@@ -192,152 +224,218 @@ impl VM {
         self.push(a + b)
     }
 
-    fn process_operation(&mut self, op_idx: usize) -> Result<(), VMError> {
+    fn process_operation(&mut self, op_idx: usize) -> Result<ExecutionResult, VMError> {
         let operation = &self.contract.code[op_idx];
         let stack_req = operation.stack_req();
-        let gas_cost = operation.gas_cost();
 
         let operation_name = format!("{:?}", operation);
 
         if self.stack_size() < stack_req.min_stack_height {
-            return Err(NotEnoughItemsOnStack);
+            return Err(NotEnoughItemsOnStack(operation_name));
         }
 
+        let gas_cost = operation.gas_cost();
+        if self.gas_available < gas_cost.base {
+            return Err(VMError::OutOfGas);
+        }
+
+        let not_impl_error = format!("Operation {:?} is not implemented", operation_name);
+
         match operation {
-            Operation::Stop => {}
+            Operation::Stop => panic!("{}", not_impl_error),
             Operation::Add => {
                 self.add()?;
             }
-            Operation::Mul => {}
-            Operation::Sub => {}
-            Operation::Div => {}
-            Operation::SDiv => {}
-            Operation::Mod => {}
-            Operation::SMod => {}
-            Operation::AddMod => {}
-            Operation::MulMod => {}
-            Operation::Exp => {}
-            Operation::SignExtend => {}
-            Operation::Lt => {}
-            Operation::Gt => {}
-            Operation::Slt => {}
-            Operation::Sgt => {}
-            Operation::Eq => {}
-            Operation::IsZero => {}
-            Operation::And => {}
-            Operation::Or => {}
-            Operation::Xor => {}
-            Operation::Not => {}
-            Operation::Byte => {}
-            Operation::Shl => {}
-            Operation::Shr => {}
-            Operation::Sar => {}
-            Operation::Address => {}
-            Operation::Balance => {}
-            Operation::Origin => {}
-            Operation::Caller => {}
-            Operation::CallValue => {}
-            Operation::CallDataLoad => {}
-            Operation::CallDataSize => {}
-            Operation::CallDataCopy => {}
-            Operation::CodeSize => {}
-            Operation::CodeCopy => {}
-            Operation::GasPrice => {}
-            Operation::ExtCodeSize => {}
-            Operation::ExtCodeCopy => {}
-            Operation::ReturnDataSize => {}
-            Operation::ReturnDataCopy => {}
-            Operation::ExtCodeHash => {}
-            Operation::BlockHash => {}
-            Operation::Coinbase => {}
-            Operation::Timestamp => {}
-            Operation::Number => {}
-            Operation::Difficulty => {}
-            Operation::GasLimit => {}
-            Operation::ChainId => {}
-            Operation::SelfBalance => {}
-            Operation::BaseFee => {}
-            Operation::Pop => {}
-            Operation::MLoad => {}
-            Operation::MStore => {}
-            Operation::MStore8 => {}
-            Operation::SLoad => {}
-            Operation::SStore => {}
-            Operation::Jump => {}
-            Operation::JumpI => {}
-            Operation::PC => {}
-            Operation::MSize => {}
-            Operation::Gas => {}
-            Operation::JumpDest => {}
-            Operation::Push1(_) => {
-                self.push(U256::from(1))?;
+            Operation::Mul => panic!("{}", not_impl_error),
+            Operation::Sub => panic!("{}", not_impl_error),
+            Operation::Div => panic!("{}", not_impl_error),
+            Operation::SDiv => panic!("{}", not_impl_error),
+            Operation::Mod => panic!("{}", not_impl_error),
+            Operation::SMod => panic!("{}", not_impl_error),
+            Operation::AddMod => panic!("{}", not_impl_error),
+            Operation::MulMod => panic!("{}", not_impl_error),
+            Operation::Exp => panic!("{}", not_impl_error),
+            Operation::SignExtend => panic!("{}", not_impl_error),
+            Operation::Lt => panic!("{}", not_impl_error),
+            Operation::Gt => panic!("{}", not_impl_error),
+            Operation::Slt => panic!("{}", not_impl_error),
+            Operation::Sgt => panic!("{}", not_impl_error),
+            Operation::Eq => panic!("{}", not_impl_error),
+            Operation::IsZero => {
+                let item = self.pop()?;
+                self.push(U256::from(item.is_zero()))?;
             }
-            Operation::Push2(_) => {}
-            Operation::Push3(_) => {}
-            Operation::Push4(_) => {}
-            Operation::Push5(_) => {}
-            Operation::Push6(_) => {}
-            Operation::Push7(_) => {}
-            Operation::Push8(_) => {}
-            Operation::Push9(_) => {}
-            Operation::Push10(_) => {}
-            Operation::Push11(_) => {}
-            Operation::Push12(_) => {}
-            Operation::Push13(_) => {}
-            Operation::Push14(_) => {}
-            Operation::Push15(_) => {}
-            Operation::Push16(_) => {}
-            Operation::Push17(_) => {}
-            Operation::Push18(_) => {}
-            Operation::Push19(_) => {}
-            Operation::Push20(_) => {}
-            Operation::Push21(_) => {}
-            Operation::Push22(_) => {}
-            Operation::Push23(_) => {}
-            Operation::Push24(_) => {}
-            Operation::Push25(_) => {}
-            Operation::Push26(_) => {}
-            Operation::Push27(_) => {}
-            Operation::Push28(_) => {}
-            Operation::Push29(_) => {}
-            Operation::Push30(_) => {}
-            Operation::Push31(_) => {}
-            Operation::Push32(_) => {}
-            Operation::Dup(_) => {}
-            Operation::Swap1 => {}
-            Operation::Swap2 => {}
-            Operation::Swap3 => {}
-            Operation::Swap4 => {}
-            Operation::Swap5 => {}
-            Operation::Swap6 => {}
-            Operation::Swap7 => {}
-            Operation::Swap8 => {}
-            Operation::Swap9 => {}
-            Operation::Swap10 => {}
-            Operation::Swap11 => {}
-            Operation::Swap12 => {}
-            Operation::Swap13 => {}
-            Operation::Swap14 => {}
-            Operation::Swap15 => {}
-            Operation::Swap16 => {}
-            Operation::Log0 => {}
-            Operation::Log1 => {}
-            Operation::Log2 => {}
-            Operation::Log3 => {}
-            Operation::Log4 => {}
-            Operation::Create => {}
-            Operation::Call => {}
-            Operation::CallCode => {}
-            Operation::Return => {}
-            Operation::DelegateCall => {}
-            Operation::Create2 => {}
-            Operation::StaticCall => {}
-            Operation::Revert => {}
-            Operation::Invalid => {}
-            Operation::SelfDestruct => {}
+            Operation::And => panic!("{}", not_impl_error),
+            Operation::Or => panic!("{}", not_impl_error),
+            Operation::Xor => panic!("{}", not_impl_error),
+            Operation::Not => panic!("{}", not_impl_error),
+            Operation::Byte => panic!("{}", not_impl_error),
+            Operation::Shl => panic!("{}", not_impl_error),
+            Operation::Shr => panic!("{}", not_impl_error),
+            Operation::Sar => panic!("{}", not_impl_error),
+            Operation::Address => {
+                self.push(U256::from_be_slice(self.context.address.as_slice()))?;
+            }
+            Operation::Balance => panic!("{}", not_impl_error),
+            Operation::Origin => {
+                self.push(U256::from_be_slice(self.context.caller.as_slice()))?;
+            }
+            Operation::Caller => panic!("{}", not_impl_error),
+            Operation::CallValue => {
+                self.push(U256::from(self.context.value))?;
+            }
+            Operation::CallDataLoad => {
+                let i = self.pop()?.to::<usize>();
+                let mut result = [0u8; 32];
+
+                if i < self.context.data.len() {
+                    let slice_end: usize = (i + 32).min(self.context.data.len());
+                    result.copy_from_slice(&self.context.data[i..slice_end]);
+                }
+
+                self.push(U256::from_be_slice(&result))?;
+            }
+            Operation::CallDataSize => {
+                self.push(U256::from(self.context.data.len()))?;
+            }
+            Operation::CallDataCopy => panic!("{}", not_impl_error),
+            Operation::CodeSize => {
+                self.push(U256::from(self.contract.code.len()))?;
+            }
+            Operation::CodeCopy => panic!("{}", not_impl_error),
+            Operation::GasPrice => panic!("{}", not_impl_error),
+            Operation::ExtCodeSize => panic!("{}", not_impl_error),
+            Operation::ExtCodeCopy => panic!("{}", not_impl_error),
+            Operation::ReturnDataSize => panic!("{}", not_impl_error),
+            Operation::ReturnDataCopy => panic!("{}", not_impl_error),
+            Operation::ExtCodeHash => panic!("{}", not_impl_error),
+            Operation::BlockHash => panic!("{}", not_impl_error),
+            Operation::Coinbase => panic!("{}", not_impl_error),
+            Operation::Timestamp => panic!("{}", not_impl_error),
+            Operation::Number => panic!("{}", not_impl_error),
+            Operation::Difficulty => panic!("{}", not_impl_error),
+            Operation::GasLimit => panic!("{}", not_impl_error),
+            Operation::ChainId => panic!("{}", not_impl_error),
+            Operation::SelfBalance => panic!("{}", not_impl_error),
+            Operation::BaseFee => panic!("{}", not_impl_error),
+            Operation::Pop => panic!("{}", not_impl_error),
+            Operation::MLoad => panic!("{}", not_impl_error),
+            Operation::MStore => {
+                let offset = self.pop()?.to::<usize>();
+                let value = self.pop()?;
+                self.load_into_memory(offset, value);
+            }
+            Operation::MStore8 => panic!("{}", not_impl_error),
+            Operation::SLoad => panic!("{}", not_impl_error),
+            Operation::SStore => panic!("{}", not_impl_error),
+            Operation::Jump => panic!("{}", not_impl_error),
+            Operation::JumpI => {
+                let offset = self.pop()?.to::<usize>();
+                let jump = self.pop()?;
+
+                if !jump.is_zero() {
+                    // -1 since it will get incremented by 1
+                    self.pc = offset - 1;
+                }
+            }
+            Operation::PC => panic!("{}", not_impl_error),
+            Operation::MSize => panic!("{}", not_impl_error),
+            Operation::Gas => panic!("{}", not_impl_error),
+            Operation::JumpDest => panic!("{}", not_impl_error),
+            Operation::Push0 => {
+                self.push(U256::ZERO)?;
+            },
+            Operation::Push1(value)
+            | Operation::Push2(value)
+            | Operation::Push3(value)
+            | Operation::Push4(value)
+            | Operation::Push5(value)
+            | Operation::Push6(value)
+            | Operation::Push7(value)
+            | Operation::Push8(value)
+            | Operation::Push9(value)
+            | Operation::Push10(value)
+            | Operation::Push11(value)
+            | Operation::Push12(value)
+            | Operation::Push13(value)
+            | Operation::Push14(value)
+            | Operation::Push15(value)
+            | Operation::Push16(value)
+            | Operation::Push17(value)
+            | Operation::Push18(value)
+            | Operation::Push19(value)
+            | Operation::Push20(value)
+            | Operation::Push21(value)
+            | Operation::Push22(value)
+            | Operation::Push23(value)
+            | Operation::Push24(value)
+            | Operation::Push25(value)
+            | Operation::Push26(value)
+            | Operation::Push27(value)
+            | Operation::Push28(value)
+            | Operation::Push29(value)
+            | Operation::Push30(value)
+            | Operation::Push31(value)
+            | Operation::Push32(value) => {
+                self.push(*value)?;
+            }
+            Operation::Dup(item_num) => {
+                let item_num = *item_num as usize;
+                if item_num == 0 || item_num > self.stack.len() {
+                    return Err(VMError::StackUnderflow);
+                }
+                let item_to_duplicate = self.stack[self.stack.len() - item_num].clone();
+                self.stack.push(item_to_duplicate);
+            }
+            Operation::Swap1 => panic!("{}", not_impl_error),
+            Operation::Swap2 => panic!("{}", not_impl_error),
+            Operation::Swap3 => panic!("{}", not_impl_error),
+            Operation::Swap4 => panic!("{}", not_impl_error),
+            Operation::Swap5 => panic!("{}", not_impl_error),
+            Operation::Swap6 => panic!("{}", not_impl_error),
+            Operation::Swap7 => panic!("{}", not_impl_error),
+            Operation::Swap8 => panic!("{}", not_impl_error),
+            Operation::Swap9 => panic!("{}", not_impl_error),
+            Operation::Swap10 => panic!("{}", not_impl_error),
+            Operation::Swap11 => panic!("{}", not_impl_error),
+            Operation::Swap12 => panic!("{}", not_impl_error),
+            Operation::Swap13 => panic!("{}", not_impl_error),
+            Operation::Swap14 => panic!("{}", not_impl_error),
+            Operation::Swap15 => panic!("{}", not_impl_error),
+            Operation::Swap16 => panic!("{}", not_impl_error),
+            Operation::Log0 => panic!("{}", not_impl_error),
+            Operation::Log1 => panic!("{}", not_impl_error),
+            Operation::Log2 => panic!("{}", not_impl_error),
+            Operation::Log3 => panic!("{}", not_impl_error),
+            Operation::Log4 => panic!("{}", not_impl_error),
+            Operation::Create => panic!("{}", not_impl_error),
+            Operation::Call => panic!("{}", not_impl_error),
+            Operation::CallCode => panic!("{}", not_impl_error),
+            Operation::Return => panic!("{}", not_impl_error),
+            Operation::DelegateCall => panic!("{}", not_impl_error),
+            Operation::Create2 => panic!("{}", not_impl_error),
+            Operation::StaticCall => panic!("{}", not_impl_error),
+            Operation::Revert => {
+                let length = self.pop()?.to::<usize>();
+                let offset = self.pop()?.to::<usize>();
+
+                let revert_data = self.read_from_memory(offset, length);
+
+                // Return the revert result
+                return Ok(ExecutionResult::Revert {
+                    reason: revert_data.to_vec(),
+                    gas_used: gas_cost.base,
+                });
+            },
+            Operation::Invalid => panic!("{}", not_impl_error),
+            Operation::SelfDestruct => panic!("{}", not_impl_error),
+            _ => panic!("Unknown operation: {:?}", operation),
         }
 
-        Ok(())
+        Ok(ExecutionResult::Success {
+            return_data: None,
+            gas_used: gas_cost.base,
+        })
     }
 }
 
@@ -347,6 +445,7 @@ mod tests {
     use crate::crypto::hash::hash_string_to_u256;
     use crate::crypto::wallet::Wallet;
     use crate::evm::bytecode_parser::BytecodeParser;
+    use crate::transaction::transaction::{ETH_TO_WEI, GWEI_TO_WEI};
     use alloy_primitives::hex::FromHex;
 
     #[test]
@@ -376,14 +475,17 @@ mod tests {
     fn test_contract_basics() {
         let mut parser = BytecodeParser::from("./test/Counter.evm").unwrap();
 
+        let value = 1 * ETH_TO_WEI;
+        let gas = 100 * GWEI_TO_WEI;
+
         let mut vm = VM::new(
             Contract::new(parser.compile().unwrap()),
             ExecutionContext::new(
                 Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
                 Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
-                0,
+                value,
                 vec![],
-                0,
+                gas,
             ),
             Arc::new(Mutex::new(State::new())),
         );
@@ -392,8 +494,8 @@ mod tests {
 
         let tx_create = Transaction::new(
             Address::ZERO,
-            100,
-            100,
+            value,
+            gas,
             100,
             100,
             parser.bytecode,
@@ -403,7 +505,10 @@ mod tests {
         vm.execute_transaction(tx_create).unwrap();
 
         assert_eq!(
-            *vm.contract.storage.get(&hash_string_to_u256("counter")).unwrap(),
+            *vm.contract
+                .storage
+                .get(&hash_string_to_u256("counter"))
+                .unwrap(),
             U256::from(0)
         );
 
@@ -413,14 +518,17 @@ mod tests {
             100,
             100,
             100,
-            hash_string_to_u256("inc()").as_le_slice()[..4].to_vec(), // function to call: inc()
+            hash_string_to_u256("inc()").to_be_bytes::<32>()[..4].to_vec(),
             Some(&eth_wallet.private_key),
         );
 
         vm.execute_transaction(tx_inc).unwrap();
 
         assert_eq!(
-            *vm.contract.storage.get(&hash_string_to_u256("counter")).unwrap(),
+            *vm.contract
+                .storage
+                .get(&hash_string_to_u256("counter"))
+                .unwrap(),
             U256::from(1)
         );
     }

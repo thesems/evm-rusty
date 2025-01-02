@@ -1,6 +1,6 @@
-use std::fs;
 use crate::evm::operation::{Operation, OperationError};
-use alloy_primitives::U256;
+use alloy_primitives::{hex, U256};
+use std::fs;
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -16,7 +16,6 @@ impl From<OperationError> for ParserError {
     }
 }
 
-
 // Structure to handle bytecode parsing
 pub struct BytecodeParser {
     pub bytecode: Vec<u8>,
@@ -29,7 +28,9 @@ impl BytecodeParser {
     }
 
     pub fn from(filepath: &str) -> Result<Self, std::io::Error> {
-        let bytecode = fs::read(filepath)?;
+        let content = fs::read_to_string(filepath)?;
+        let bytecode = hex::decode(content.trim())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         Ok(Self { bytecode, pc: 0 })
     }
 
@@ -47,6 +48,9 @@ impl BytecodeParser {
         }
 
         let opcode = self.bytecode[self.pc];
+        if opcode == 0xfe {
+            return Ok(None);
+        }
 
         let operation = match opcode {
             // Handle push operations specially
@@ -64,12 +68,12 @@ impl BytecodeParser {
                 }
 
                 self.pc += bytes_to_read + 1;
-                Operation::from_byte(opcode, Some(value))
+                Ok::<Operation, OperationError>(Operation::from_byte(opcode, Some(value))?)
             }
             // Handle all other operations
             _ => {
                 self.pc += 1;
-                Operation::from_byte(opcode, None)
+                Ok::<Operation, OperationError>(Operation::from_byte(opcode, None)?)
             }
         }?;
 
@@ -85,14 +89,17 @@ mod tests {
     #[test]
     fn test_compile() {
         let file_path = "./test/Add.evm";
-        let bytecode = fs::read(file_path)
-            .expect("Failed to read EVM bytecode file");
+        let bytecode = fs::read(file_path).expect("Failed to read EVM bytecode file");
 
         let mut parser = BytecodeParser::new(bytecode);
 
-        let operations = parser.compile()
+        let operations = parser
+            .compile()
             .expect("Compilation of EVM bytecode failed");
 
-        assert!(!operations.is_empty(), "The operations vector should not be empty");
+        assert!(
+            !operations.is_empty(),
+            "The operations vector should not be empty"
+        );
     }
 }

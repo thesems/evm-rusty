@@ -11,8 +11,8 @@ pub enum OperationError {
 
 // Gas cost calculation helper structs
 pub struct GasCost {
-    base: u64,               // Base cost of operation
-    dynamic_multiplier: u64, // For operations with dynamic costs
+    pub base: u64,               // Base cost of operation
+    pub dynamic_multiplier: u64, // For operations with dynamic costs
 }
 
 // Stack requirements for operation
@@ -54,6 +54,9 @@ pub enum Operation {
     Shl,
     Shr,
     Sar,
+
+    // 0x20
+    Keccak256 = 0x20,
 
     // 0x30 - 0x3f: Environmental Information
     Address = 0x30,
@@ -99,6 +102,7 @@ pub enum Operation {
     JumpDest,
 
     // 0x60 - 0x7f: Push Operations
+    Push0 = 0x5F,
     Push1(U256) = 0x60,
     Push2(U256),
     Push3(U256),
@@ -167,30 +171,35 @@ pub enum Operation {
     Return,
     DelegateCall,
     Create2,
-    StaticCall,
-    Revert,
-    Invalid,
-    SelfDestruct,
+    StaticCall = 0xfa,
+    Revert = 0xfd,
+    Invalid = 0xfe,
+    SelfDestruct = 0xff,
 }
 
 impl Operation {
     // Convert a byte to Operation
     pub fn from_byte(byte: u8, data: Option<U256>) -> Result<Self, OperationError> {
         match byte {
-            // // 0x00 - 0x0f: Stop and Arithmetic
-            // // 0x10 - 0x1f: Comparison & Bitwise Logic
-            // // 0x30 - 0x3f: Environmental Information
-            // // 0x40 - 0x4f: Block Information
-            // // 0x50 - 0x5f: Stack, Memory, Storage and Flow
-            n @ 0x00..0x5f | n @ 0x90..0x9f => {
-                Ok(Operation::from_repr(n).ok_or(OperationError::InvalidOpcodeFormat)?)
+            // 0x00 - 0x0f: Stop and Arithmetic
+            // 0x10 - 0x1f: Comparison & Bitwise Logic
+            // 0x30 - 0x3f: Environmental Information
+            // 0x40 - 0x4f: Block Information
+            // 0x50 - 0x5f: Stack, Memory, Storage and Flow
+            // Swap operations (0x90 - 0x9f)
+            // 0xa0 - 0xa4: Logging
+            // 0xf0 - 0xff: System
+            0x00..0x5f | 0x90..=0x9f | 0xa0..=0xff => {
+                Ok(Operation::from_repr(byte).ok_or(OperationError::InvalidOpcodeFormat)?)
             }
 
+            0x5f => Ok(Operation::Push0),
+
             // Push operations (0x60 - 0x7f)
-            n @ 0x60..=0x7f => {
+            0x60..=0x7f => {
                 // Check if we have data for push operations
                 match data {
-                    Some(value) => Ok(match n - 0x60 {
+                    Some(value) => Ok(match byte - 0x60 {
                         0 => Operation::Push1(value),
                         1 => Operation::Push2(value),
                         2 => Operation::Push3(value),
@@ -230,16 +239,9 @@ impl Operation {
             }
 
             // Dup operations (0x80 - 0x8f)
-            n @ 0x80..=0x8f => Ok(Operation::Dup((n - 0x80 + 1) as u8)),
+            0x80..=0x8f => Ok(Operation::Dup((byte - 0x80 + 1) as u8)),
 
             _ => Err(OperationError::UnknownOpcode),
-            // // Swap operations (0x90 - 0x9f)
-            // 0x90 => Ok(Operation::Swap1),
-            // 0x91 => Ok(Operation::Swap2),
-            // // ... add all swap operations
-            // 0x9f => Ok(Operation::Swap16),
-
-            // Add remaining operations...
         }
     }
 
@@ -249,7 +251,34 @@ impl Operation {
             Operation::Push1(_) => 1,
             Operation::Push2(_) => 2,
             Operation::Push3(_) => 3,
-            // ... and so on for all push operations
+            Operation::Push4(_) => 4,
+            Operation::Push5(_) => 5,
+            Operation::Push6(_) => 6,
+            Operation::Push7(_) => 7,
+            Operation::Push8(_) => 8,
+            Operation::Push9(_) => 9,
+            Operation::Push10(_) => 10,
+            Operation::Push11(_) => 11,
+            Operation::Push12(_) => 12,
+            Operation::Push13(_) => 13,
+            Operation::Push14(_) => 14,
+            Operation::Push15(_) => 15,
+            Operation::Push16(_) => 16,
+            Operation::Push17(_) => 17,
+            Operation::Push18(_) => 18,
+            Operation::Push19(_) => 19,
+            Operation::Push20(_) => 20,
+            Operation::Push21(_) => 21,
+            Operation::Push22(_) => 22,
+            Operation::Push23(_) => 23,
+            Operation::Push24(_) => 24,
+            Operation::Push25(_) => 25,
+            Operation::Push26(_) => 26,
+            Operation::Push27(_) => 27,
+            Operation::Push28(_) => 28,
+            Operation::Push29(_) => 29,
+            Operation::Push30(_) => 30,
+            Operation::Push31(_) => 31,
             Operation::Push32(_) => 32,
             _ => 0,
         }
@@ -377,7 +406,8 @@ impl Operation {
     // Get stack requirements for this operation
     pub fn stack_req(&self) -> StackReq {
         match self {
-            Operation::Push1(_)
+            Operation::Push0
+            | Operation::Push1(_)
             | Operation::Push2(_)
             | Operation::Push3(_)
             | Operation::Push4(_)
@@ -408,9 +438,26 @@ impl Operation {
             | Operation::Push29(_)
             | Operation::Push30(_)
             | Operation::Push31(_)
-            | Operation::Push32(_) => StackReq {
+            | Operation::Push32(_)
+            | Operation::CallDataSize
+            | Operation::CodeSize
+            | Operation::CallValue
+            | Operation::Origin
+            | Operation::Address => StackReq {
                 min_stack_height: 0,
                 stack_inputs: 0,
+                stack_outputs: 1,
+            },
+
+            Operation::CallDataLoad => StackReq {
+                min_stack_height: 0,
+                stack_inputs: 1,
+                stack_outputs: 1,
+            },
+
+            Operation::IsZero => StackReq {
+                min_stack_height: 1,
+                stack_inputs: 1,
                 stack_outputs: 1,
             },
 
@@ -420,7 +467,13 @@ impl Operation {
                 stack_outputs: 1,
             },
 
-            Operation::Pop => StackReq {
+            Operation::MStore | Operation::MStore8 | Operation::JumpI | Operation::Revert => StackReq {
+                min_stack_height: 2,
+                stack_inputs: 2,
+                stack_outputs: 0,
+            },
+
+            Operation::Pop | Operation::Jump => StackReq {
                 min_stack_height: 1,
                 stack_inputs: 1,
                 stack_outputs: 0,
@@ -433,15 +486,11 @@ impl Operation {
             },
 
             // Default conservative requirements
-            _ => StackReq {
-                min_stack_height: 1,
-                stack_inputs: 1,
-                stack_outputs: 1,
-            },
+            _ => panic!("Stack requirements not implemented for {:?}", self),
         }
     }
 
-    fn opcode(&self) -> u8 {
+    pub fn opcode(&self) -> u8 {
         // SAFETY: This is safe because:
         // 1. The enum is #[repr(u8)]
         // 2. We're only reading the discriminant, not the associated data
