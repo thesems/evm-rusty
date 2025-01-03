@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn test_sign_verify() {
         let eth_wallet = Wallet::generate();
-        let mut tx = Transaction::new(
+        let tx = Transaction::new(
             eth_wallet.address,
             100,
             21000,

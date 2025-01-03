@@ -489,6 +489,12 @@ impl Operation {
                 stack_outputs: 1,
             },
 
+            Operation::JumpDest => StackReq {
+                min_stack_height: 0,
+                stack_inputs: 0,
+                stack_outputs: 0,
+            },
+
             // Default conservative requirements
             _ => panic!("Stack requirements not implemented for {:?}", self),
         }

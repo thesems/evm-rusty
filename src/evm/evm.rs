@@ -398,7 +398,11 @@ impl VM {
             Operation::PC => panic!("{}", not_impl_error),
             Operation::MSize => panic!("{}", not_impl_error),
             Operation::Gas => panic!("{}", not_impl_error),
-            Operation::JumpDest => panic!("{}", not_impl_error),
+            Operation::JumpDest => {
+                // JUMPDEST is a marker for valid jump destinations. It has no effect
+                // on the machine state, so we simply proceed to the next instruction.
+                // No changes are made to the stack, memory, or storage.
+            }
             Operation::Push0 => {
                 self.push(U256::ZERO)?;
             }
