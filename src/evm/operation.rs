@@ -455,7 +455,7 @@ impl Operation {
                 stack_outputs: 1,
             },
 
-            Operation::IsZero => StackReq {
+            Operation::IsZero | Operation::SLoad => StackReq {
                 min_stack_height: 1,
                 stack_inputs: 1,
                 stack_outputs: 1,
@@ -467,7 +467,11 @@ impl Operation {
                 stack_outputs: 1,
             },
 
-            Operation::MStore | Operation::MStore8 | Operation::JumpI | Operation::Revert => StackReq {
+            Operation::MStore
+            | Operation::MStore8
+            | Operation::SStore
+            | Operation::JumpI
+            | Operation::Revert => StackReq {
                 min_stack_height: 2,
                 stack_inputs: 2,
                 stack_outputs: 0,

@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 
 use crate::block::account::Account;
-use crate::evm::evm::{Contract, ExecutionContext, VMError, VM};
-use crate::transaction::errors::TransactionError;
-use crate::transaction::transaction::Transaction;
-use crate::transaction::transaction::TRANSACTION_GAS_COST;
+use crate::evm::evm::Contract;
 use alloy_primitives::{Address, B256};
 
 pub struct State {
@@ -62,7 +59,7 @@ mod tests {
         let eth_wallet_sender = Wallet::generate();
         let eth_wallet_receiver = Wallet::generate();
 
-        let mut state_arc = Arc::new(Mutex::new(State::new()));
+        let state_arc = Arc::new(Mutex::new(State::new()));
         let mut state = state_arc.lock().unwrap();
 
         {

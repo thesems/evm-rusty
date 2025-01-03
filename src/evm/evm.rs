@@ -4,12 +4,10 @@ use crate::evm::bytecode_parser::{BytecodeParser, ParserError};
 use crate::evm::evm::VMError::{NoItemsOnStack, NotEnoughItemsOnStack, StackFull};
 use crate::evm::operation::Operation;
 use crate::transaction::transaction::Transaction;
-use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
+use alloy_rlp::{Encodable, RlpDecodable, RlpEncodable};
 
-use crate::crypto::hash::{hash_slice_to_b256, hash_string_to_u256};
+use crate::crypto::hash::hash_slice_to_b256;
 use alloy_primitives::{keccak256, Address, B256, U256};
-use clap::builder::TypedValueParser;
-use k256::pkcs8::der::Encode;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +21,7 @@ pub enum ExecutionResult {
     Revert {
         reason: Vec<u8>,
         gas_used: u64,
-    }
+    },
 }
 
 #[derive(Debug, RlpEncodable, RlpDecodable, PartialEq)]
@@ -43,6 +41,7 @@ pub enum VMError {
     InvalidBytecode,
     OutOfGas,
     StackUnderflow,
+    NoOperationExecuted,
 }
 impl From<ParserError> for VMError {
     fn from(value: ParserError) -> Self {
@@ -88,6 +87,11 @@ impl ExecutionContext {
     }
 }
 
+enum StorageChangeType {
+    Set,
+    Delete,
+}
+
 pub struct VM {
     stack: Vec<U256>,
     memory: Vec<u8>,
@@ -97,6 +101,7 @@ pub struct VM {
     creation_offset: usize,
     pc: usize,
     state: Arc<Mutex<State>>,
+    storage_revert: HashMap<U256, (StorageChangeType, U256)>,
 }
 
 impl VM {
@@ -121,6 +126,7 @@ impl VM {
             creation_offset,
             pc: 0,
             state,
+            storage_revert: HashMap::new(),
         }
     }
 
@@ -139,15 +145,38 @@ impl VM {
         &self.memory[offset..offset + length]
     }
 
-    pub fn execute_operations(&mut self, code: Vec<Operation>) -> Result<(), VMError> {
-        while self.pc < code.len() {
-            self.process_operation(self.pc)?;
-            self.pc += 1;
+    fn revert_storage(&mut self) {
+        // Revert all changes made to the storage by replacing current values
+        // with the appropriate actions from the storage_revert map.
+        for (key, (change_type, old_value)) in &self.storage_revert {
+            match change_type {
+                StorageChangeType::Set => {
+                    if let Some(storage) = self.contract.storage.get_mut(key) {
+                        *storage = *old_value;
+                    }
+                }
+                StorageChangeType::Delete => {
+                    self.contract.storage.remove(key);
+                }
+            }
         }
-        Ok(())
+        // Clear the storage_revert map after reverting changes.
+        self.storage_revert.clear();
     }
 
-    pub fn execute_transaction(&mut self, transaction: Transaction) -> Result<(), VMError> {
+    pub fn execute_operations(&mut self, code: Vec<Operation>) -> Result<ExecutionResult, VMError> {
+        let mut execution_result: Option<ExecutionResult> = None;
+        while self.pc < code.len() {
+            execution_result = Some(self.process_operation(self.pc)?);
+            self.pc += 1;
+        }
+        execution_result.ok_or(VMError::NoOperationExecuted)
+    }
+
+    pub fn execute_transaction(
+        &mut self,
+        transaction: Transaction,
+    ) -> Result<ExecutionResult, VMError> {
         // differentiate contract creation
         if transaction.to.is_zero() {
             self.call_contract_create(transaction)
@@ -167,7 +196,10 @@ impl VM {
         Address::from_slice(&hash[12..])
     }
 
-    pub fn call_contract_create(&mut self, transaction: Transaction) -> Result<(), VMError> {
+    pub fn call_contract_create(
+        &mut self,
+        transaction: Transaction,
+    ) -> Result<ExecutionResult, VMError> {
         let sender = transaction
             .get_sender_address()
             .ok_or(VMError::InvalidTransaction)?;
@@ -191,7 +223,7 @@ impl VM {
         }
     }
 
-    pub fn call_contract(&mut self, transaction: Transaction) -> Result<(), VMError> {
+    pub fn call_contract(&mut self, transaction: Transaction) -> Result<ExecutionResult, VMError> {
         // extract function selector
         let selector = &transaction.input_data[0..4];
 
@@ -199,7 +231,10 @@ impl VM {
         self.stack.clear();
         self.memory.clear();
 
-        Ok(())
+        Ok(ExecutionResult::Success {
+            return_data: None,
+            gas_used: 0,
+        })
     }
 
     fn stack_size(&self) -> u32 {
@@ -326,8 +361,30 @@ impl VM {
                 self.load_into_memory(offset, value);
             }
             Operation::MStore8 => panic!("{}", not_impl_error),
-            Operation::SLoad => panic!("{}", not_impl_error),
-            Operation::SStore => panic!("{}", not_impl_error),
+            Operation::SLoad => {
+                let key = self.pop()?; // Get the storage key from the stack
+                let value = self
+                    .contract
+                    .storage
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or(U256::ZERO);
+                self.push(value)?;
+            }
+            Operation::SStore => {
+                let storage_key = self.pop()?;
+                let storage_value = self.pop()?;
+
+                let prev_value = self.contract.storage.insert(storage_key, storage_value);
+
+                if prev_value.is_none() {
+                    self.storage_revert
+                        .insert(storage_key, (StorageChangeType::Delete, storage_value));
+                } else {
+                    self.storage_revert
+                        .insert(storage_key, (StorageChangeType::Set, prev_value.unwrap()));
+                }
+            }
             Operation::Jump => panic!("{}", not_impl_error),
             Operation::JumpI => {
                 let offset = self.pop()?.to::<usize>();
@@ -344,7 +401,7 @@ impl VM {
             Operation::JumpDest => panic!("{}", not_impl_error),
             Operation::Push0 => {
                 self.push(U256::ZERO)?;
-            },
+            }
             Operation::Push1(value)
             | Operation::Push2(value)
             | Operation::Push3(value)
@@ -419,6 +476,7 @@ impl VM {
                 let length = self.pop()?.to::<usize>();
                 let offset = self.pop()?.to::<usize>();
 
+                self.revert_storage();
                 let revert_data = self.read_from_memory(offset, length);
 
                 // Return the revert result
@@ -426,7 +484,7 @@ impl VM {
                     reason: revert_data.to_vec(),
                     gas_used: gas_cost.base,
                 });
-            },
+            }
             Operation::Invalid => panic!("{}", not_impl_error),
             Operation::SelfDestruct => panic!("{}", not_impl_error),
             _ => panic!("Unknown operation: {:?}", operation),
@@ -530,6 +588,44 @@ mod tests {
                 .get(&hash_string_to_u256("counter"))
                 .unwrap(),
             U256::from(1)
+        );
+    }
+
+    #[test]
+    fn test_storage_revert() {
+        let code = vec![
+            Operation::Push1(U256::from(42)), // Value to store
+            Operation::Push1(U256::from(0)),  // Key
+            Operation::SStore,                // Store the value (SSTORE)
+            Operation::Push1(U256::from(0)),  // Key
+            Operation::SLoad,                 // Load the value back (SLOAD)
+            Operation::Push1(U256::from(10)), // Revert memory length
+            Operation::Push1(U256::from(0)),  // Revert memory offset
+            Operation::Revert,                // Trigger revert
+        ];
+
+        let mut vm = VM::new(
+            Contract::new(code.clone()),
+            ExecutionContext::new(
+                Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
+                Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
+                ETH_TO_WEI,
+                vec![],
+                ETH_TO_WEI,
+            ),
+            Arc::new(Mutex::new(State::new())),
+        );
+
+        // Execute the operations in sequence
+        let result = vm.execute_operations(code).unwrap();
+
+        // Assert that execution resulted in a revert
+        // Check that no storage modifications persist after revert
+        let key = U256::from(0);
+        assert_eq!(vm.contract.storage.get(&key), None);
+        assert!(
+            matches!(result, ExecutionResult::Revert { .. }),
+            "Expected a revert operation."
         );
     }
 }

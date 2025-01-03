@@ -1,7 +1,7 @@
 // EIP-2718 - multiple transaction formats via Recursive Length Prefix (RLP) encoding
 
 use crate::transaction::errors::TransactionError;
-use alloy_primitives::{Address, Keccak256, B256};
+use alloy_primitives::{Address, Keccak256};
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};
 
