@@ -127,12 +127,45 @@ impl VM {
         }
     }
 
-    fn load_into_memory(&mut self, offset: usize, value: U256) {
+    fn load_into_memory(&mut self, offset: usize, value: U256) -> Result<(), VMError> {
         let bytes = value.to_be_bytes::<32>();
-        if self.memory.len() < offset + 32 {
-            self.memory.resize(offset + 32, 0);
-        }
+        self.expand_memory(offset, 32)?;
         self.memory[offset..offset + 32].copy_from_slice(&bytes);
+        Ok(())
+    }
+
+    fn expand_memory(&mut self, offset: usize, required_size: usize) -> Result<(), VMError> {
+        let new_size = offset + required_size;
+        if self.memory.len() < new_size {
+            if Self::calc_memory_expansion_gas(offset + 32) < self.gas_available {
+                self.memory.resize(new_size, 0);
+            } else {
+                return Err(VMError::OutOfGas);
+            }
+        }
+        Ok(())
+    }
+
+    fn calc_memory_expansion_gas(memory_byte_size: usize) -> u64 {
+        /// Calculates the gas cost for expanding the memory to the given size.
+        ///
+        /// # Arguments
+        ///
+        /// * `memory_byte_size` - The size in bytes of the memory to expand to.
+        ///
+        /// # Returns
+        ///
+        /// The calculated gas cost for the memory expansion.
+        ///
+        /// The gas cost is calculated based on the EVM formula:
+        /// - The word size is the memory size rounded up to the nearest multiple of 32.
+        /// - The memory cost combines a quadratic term and a linear term:
+        ///   - Quadratic term: `(memory_size_word^2) / 512`
+        ///   - Linear term: `3 * memory_size_word`
+        ///
+        let memory_size_word = (memory_byte_size + 31) / 32;
+        let memory_cost = (memory_size_word * memory_size_word / 512) + (3 * memory_size_word);
+        memory_cost as u64
     }
 
     fn read_from_memory(&mut self, offset: usize, length: usize) -> &[u8] {
@@ -331,7 +364,34 @@ impl VM {
             Operation::CodeSize => {
                 self.push(U256::from(self.contract.code.len()))?;
             }
-            Operation::CodeCopy => panic!("{}", not_impl_error),
+            Operation::CodeCopy => {
+                let dest_offset = self.pop()?.to::<usize>();
+                let offset = self.pop()?.to::<usize>();
+                let size = self.pop()?.to::<usize>();
+
+                let minimum_word_size = (size as u64 + 31) / 32;
+                let static_gas = 3;
+                let dynamic_gas =
+                    3 * minimum_word_size + Self::calc_memory_expansion_gas(size);
+
+                if self.gas_available < static_gas + dynamic_gas {
+                    return Err(VMError::OutOfGas);
+                }
+
+                self.gas_available -= static_gas + dynamic_gas;
+
+                self.expand_memory(dest_offset, size)?;
+
+                // Get the raw bytecode slice
+                for i in 0..size {
+                    let byte = if offset + i < self.contract.code.len() {
+                        self.contract.code[offset + i] // Copy raw byte directly
+                    } else {
+                        0 // For out-of-bound bytes, pad with 0
+                    };
+                    self.memory[dest_offset + i] = byte;
+                }
+            }
             Operation::GasPrice => panic!("{}", not_impl_error),
             Operation::ExtCodeSize => panic!("{}", not_impl_error),
             Operation::ExtCodeCopy => panic!("{}", not_impl_error),
@@ -354,7 +414,7 @@ impl VM {
             Operation::MStore => {
                 let offset = self.pop()?.to::<usize>();
                 let value = self.pop()?;
-                self.load_into_memory(offset, value);
+                self.load_into_memory(offset, value)?;
             }
             Operation::MStore8 => panic!("{}", not_impl_error),
             Operation::SLoad => {

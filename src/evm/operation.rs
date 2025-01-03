@@ -406,6 +406,12 @@ impl Operation {
     // Get stack requirements for this operation
     pub fn stack_req(&self) -> StackReq {
         match self {
+            Operation::JumpDest => StackReq {
+                min_stack_height: 0,
+                stack_inputs: 0,
+                stack_outputs: 0,
+            },
+
             Operation::Push0
             | Operation::Push1(_)
             | Operation::Push2(_)
@@ -455,15 +461,16 @@ impl Operation {
                 stack_outputs: 1,
             },
 
+
+            Operation::Pop | Operation::Jump => StackReq {
+                min_stack_height: 1,
+                stack_inputs: 1,
+                stack_outputs: 0,
+            },
+
             Operation::IsZero | Operation::SLoad => StackReq {
                 min_stack_height: 1,
                 stack_inputs: 1,
-                stack_outputs: 1,
-            },
-
-            Operation::Add | Operation::Sub | Operation::Mul | Operation::Div => StackReq {
-                min_stack_height: 2,
-                stack_inputs: 2,
                 stack_outputs: 1,
             },
 
@@ -477,9 +484,15 @@ impl Operation {
                 stack_outputs: 0,
             },
 
-            Operation::Pop | Operation::Jump => StackReq {
-                min_stack_height: 1,
-                stack_inputs: 1,
+            Operation::Add | Operation::Sub | Operation::Mul | Operation::Div => StackReq {
+                min_stack_height: 2,
+                stack_inputs: 2,
+                stack_outputs: 1,
+            },
+
+            Operation::CodeCopy => StackReq {
+                min_stack_height: 3,
+                stack_inputs: 3,
                 stack_outputs: 0,
             },
 
@@ -487,12 +500,6 @@ impl Operation {
                 min_stack_height: *n as u32,
                 stack_inputs: 0,
                 stack_outputs: 1,
-            },
-
-            Operation::JumpDest => StackReq {
-                min_stack_height: 0,
-                stack_inputs: 0,
-                stack_outputs: 0,
             },
 
             // Default conservative requirements
