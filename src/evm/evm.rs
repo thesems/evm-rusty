@@ -54,12 +54,12 @@ impl From<ParserError> for VMError {
 
 #[derive(Clone)]
 pub struct Contract {
-    pub code: Vec<Operation>,
+    pub code: Vec<u8>,
     pub storage: HashMap<U256, U256>,
 }
 
 impl Contract {
-    pub fn new(code: Vec<Operation>) -> Self {
+    pub fn new(code: Vec<u8>) -> Self {
         Self {
             code,
             storage: HashMap::new(),
@@ -109,9 +109,6 @@ impl VM {
         // Find the runtime code start (look for 0xf3 0xfe sequence)
         let creation_offset = contract
             .code
-            .iter()
-            .map(|op| op.opcode())
-            .collect::<Vec<u8>>()
             .windows(2)
             .position(|window| window == [0xf3, 0xfe])
             .map(|pos| pos + 2) // Skip past the f3 fe
@@ -164,10 +161,13 @@ impl VM {
         self.storage_revert.clear();
     }
 
-    pub fn execute_operations(&mut self, code: Vec<Operation>) -> Result<ExecutionResult, VMError> {
+    pub fn execute_operations(&mut self, code: Vec<u8>) -> Result<ExecutionResult, VMError> {
+        let mut parser = BytecodeParser::new(code);
+        let operations = parser.compile().map_err(|e| VMError::InvalidBytecode)?;
+
         let mut execution_result: Option<ExecutionResult> = None;
-        while self.pc < code.len() {
-            execution_result = Some(self.process_operation(self.pc)?);
+        while self.pc < operations.len() {
+            execution_result = Some(self.process_operation(&operations[self.pc])?);
             self.pc += 1;
         }
         execution_result.ok_or(VMError::NoOperationExecuted)
@@ -216,11 +216,7 @@ impl VM {
             ),
         );
 
-        let mut parser = BytecodeParser::new(transaction.input_data.clone());
-        match parser.compile() {
-            Ok(code) => self.execute_operations(code),
-            Err(_) => Err(VMError::InvalidBytecode),
-        }
+        self.execute_operations(transaction.input_data.clone())
     }
 
     pub fn call_contract(&mut self, transaction: Transaction) -> Result<ExecutionResult, VMError> {
@@ -259,10 +255,8 @@ impl VM {
         self.push(a + b)
     }
 
-    fn process_operation(&mut self, op_idx: usize) -> Result<ExecutionResult, VMError> {
-        let operation = &self.contract.code[op_idx];
+    fn process_operation(&mut self, operation: &Operation) -> Result<ExecutionResult, VMError> {
         let stack_req = operation.stack_req();
-
         let operation_name = format!("{:?}", operation);
 
         if self.stack_size() < stack_req.min_stack_height {
@@ -515,9 +509,9 @@ mod tests {
     #[test]
     fn test_add_operation() {
         let code = vec![
-            Operation::Push1(U256::from(1)),
-            Operation::Push1(U256::from(1)),
-            Operation::Add,
+            Operation::Push1(U256::from(1)).opcode(),
+            Operation::Push1(U256::from(1)).opcode(),
+            Operation::Add.opcode(),
         ];
 
         let mut vm = VM::new(
@@ -543,7 +537,7 @@ mod tests {
         let gas = 100 * GWEI_TO_WEI;
 
         let mut vm = VM::new(
-            Contract::new(parser.compile().unwrap()),
+            Contract::new(parser.bytecode.clone()),
             ExecutionContext::new(
                 Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
                 Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
@@ -600,14 +594,19 @@ mod tests {
     #[test]
     fn test_storage_revert() {
         let code = vec![
-            Operation::Push1(U256::from(42)), // Value to store
-            Operation::Push1(U256::from(0)),  // Key
-            Operation::SStore,                // Store the value (SSTORE)
-            Operation::Push1(U256::from(0)),  // Key
-            Operation::SLoad,                 // Load the value back (SLOAD)
-            Operation::Push1(U256::from(10)), // Revert memory length
-            Operation::Push1(U256::from(0)),  // Revert memory offset
-            Operation::Revert,                // Trigger revert
+            Operation::Push1(U256::from(42)).opcode(), // Value to store
+            42,
+            Operation::Push1(U256::from(0)).opcode(), // Key
+            0,
+            Operation::SStore.opcode(), // Store the value (SSTORE)
+            Operation::Push1(U256::from(0)).opcode(), // Key
+            0,
+            Operation::SLoad.opcode(), // Load the value back (SLOAD)
+            Operation::Push1(U256::from(10)).opcode(), // Revert memory length
+            10,
+            Operation::Push1(U256::from(0)).opcode(), // Revert memory offset
+            0,
+            Operation::Revert.opcode(), // Trigger revert
         ];
 
         let mut vm = VM::new(
