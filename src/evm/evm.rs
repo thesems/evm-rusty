@@ -528,7 +528,17 @@ impl VM {
             Operation::Create => panic!("{}", not_impl_error),
             Operation::Call => panic!("{}", not_impl_error),
             Operation::CallCode => panic!("{}", not_impl_error),
-            Operation::Return => panic!("{}", not_impl_error),
+            Operation::Return => {
+                let size = self.pop()?.to::<usize>();
+                let offset = self.pop()?.to::<usize>();
+
+                let return_data = self.read_from_memory(offset, size);
+
+                return Ok(ExecutionResult::Success {
+                    return_data: Some(return_data.to_vec()),
+                    gas_used: gas_cost.base,
+                });
+            }
             Operation::DelegateCall => panic!("{}", not_impl_error),
             Operation::Create2 => panic!("{}", not_impl_error),
             Operation::StaticCall => panic!("{}", not_impl_error),

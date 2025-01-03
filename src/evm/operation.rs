@@ -478,6 +478,7 @@ impl Operation {
             | Operation::MStore8
             | Operation::SStore
             | Operation::JumpI
+            | Operation::Return
             | Operation::Revert => StackReq {
                 min_stack_height: 2,
                 stack_inputs: 2,
