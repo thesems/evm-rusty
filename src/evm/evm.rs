@@ -353,7 +353,9 @@ impl VM {
             Operation::ChainId => panic!("{}", not_impl_error),
             Operation::SelfBalance => panic!("{}", not_impl_error),
             Operation::BaseFee => panic!("{}", not_impl_error),
-            Operation::Pop => panic!("{}", not_impl_error),
+            Operation::Pop => {
+                self.pop()?; // Simply discard the value at the top of the stack
+            }
             Operation::MLoad => panic!("{}", not_impl_error),
             Operation::MStore => {
                 let offset = self.pop()?.to::<usize>();
