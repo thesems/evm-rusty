@@ -364,7 +364,9 @@ impl VM {
         match operation {
             Operation::Stop => panic!("{}", not_impl_error),
             Operation::Add => {
-                self.add()?;
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(a + b)?;
             }
             Operation::Mul => {
                 let a = self.pop()?;
