@@ -494,11 +494,25 @@ impl VM {
             Operation::Address => {
                 self.push(U256::from_be_slice(self.context.address.as_slice()))?;
             }
-            Operation::Balance => panic!("{}", not_impl_error),
+            Operation::Balance => {
+                let address = Address::from_word(FixedBytes::from(self.pop()?.to_be_bytes::<32>()));
+
+                let balance = self
+                    .state
+                    .lock()
+                    .unwrap()
+                    .accounts
+                    .get(&address)
+                    .map_or(U256::ZERO, |account| U256::from(account.balance));
+
+                self.push(balance)?;
+            }
             Operation::Origin => {
                 self.push(U256::from_be_slice(self.context.caller.as_slice()))?;
             }
-            Operation::Caller => panic!("{}", not_impl_error),
+            Operation::Caller => {
+                self.push(U256::from_be_slice(self.context.caller.as_slice()))?;
+            }
             Operation::CallValue => {
                 self.push(U256::from(self.context.value))?;
             }
@@ -509,6 +523,8 @@ impl VM {
                 if i < self.context.data.len() {
                     let slice_end: usize = (i + 32).min(self.context.data.len());
                     result.copy_from_slice(&self.context.data[i..slice_end]);
+                    let dest_end = 32.min(slice_end);
+                    result[..dest_end].copy_from_slice(&self.context.data[i..slice_end]);
                 }
 
                 self.push(U256::from_be_slice(&result))?;
