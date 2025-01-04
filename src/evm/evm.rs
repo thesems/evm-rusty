@@ -331,10 +331,19 @@ impl VM {
         self.stack.pop().ok_or(NoItemsOnStack)
     }
 
-    fn add(&mut self) -> Result<(), VMError> {
-        let a = self.pop()?;
-        let b = self.pop()?;
-        self.push(a + b)
+    fn jump_to(&mut self, offset: usize) -> Result<ExecutionResult, VMError> {
+        if let Operation::JumpDest =
+            Operation::from_byte(self.contract.code[offset], None)
+                .map_err(|_| VMError::InvalidBytecode)?
+        {
+            Ok(ExecutionResult::Success {
+                return_data: None,
+                gas_used: 0,
+                jump_dest: offset,
+            })
+        } else {
+            Err(VMError::InvalidJumpDest)
+        }
     }
 
     fn process_operation(&mut self, operation: &Operation) -> Result<ExecutionResult, VMError> {
@@ -600,24 +609,16 @@ impl VM {
                         .insert(storage_key, (StorageChangeType::Set, prev_value.unwrap()));
                 }
             }
-            Operation::Jump => panic!("{}", not_impl_error),
+            Operation::Jump => {
+                let offset = self.pop()?.to::<usize>();
+                return self.jump_to(offset);
+            }
             Operation::JumpI => {
                 let offset = self.pop()?.to::<usize>();
                 let jump = self.pop()?;
 
                 if !jump.is_zero() {
-                    if let Operation::JumpDest =
-                        Operation::from_byte(self.contract.code[offset], None)
-                            .map_err(|_| VMError::InvalidBytecode)?
-                    {
-                        return Ok(ExecutionResult::Success {
-                            return_data: None,
-                            gas_used: 0,
-                            jump_dest: offset,
-                        });
-                    } else {
-                        return Err(VMError::InvalidJumpDest);
-                    }
+                    return self.jump_to(offset);
                 }
             }
             Operation::PC => panic!("{}", not_impl_error),
