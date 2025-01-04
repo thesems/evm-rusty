@@ -7,7 +7,7 @@ use crate::transaction::transaction::Transaction;
 use alloy_rlp::{Encodable, RlpDecodable, RlpEncodable};
 
 use crate::crypto::hash::hash_slice_to_b256;
-use alloy_primitives::{keccak256, Address, B256, U256};
+use alloy_primitives::{keccak256, Address, FixedBytes, B256, I256, U256};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -371,12 +371,48 @@ impl VM {
             Operation::Add => {
                 self.add()?;
             }
-            Operation::Mul => panic!("{}", not_impl_error),
-            Operation::Sub => panic!("{}", not_impl_error),
-            Operation::Div => panic!("{}", not_impl_error),
-            Operation::SDiv => panic!("{}", not_impl_error),
-            Operation::Mod => panic!("{}", not_impl_error),
-            Operation::SMod => panic!("{}", not_impl_error),
+            Operation::Mul => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(a * b)?;
+            }
+            Operation::Sub => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(a - b)?;
+            }
+            Operation::Div => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                if b.is_zero() {
+                    return Err(VMError::DivisionByZero);
+                }
+                self.push(a / b)?;
+            }
+            Operation::SDiv => {
+                let a = I256::from_limbs(*self.pop()?.as_limbs());
+                let b = I256::from_limbs(*self.pop()?.as_limbs());
+                if b.is_zero() {
+                    return Err(VMError::DivisionByZero);
+                }
+                self.push(U256::from_limbs(*(a / b).as_limbs()))?;
+            }
+            Operation::Mod => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                if b.is_zero() {
+                    return Err(VMError::DivisionByZero);
+                }
+                self.push(a % b)?;
+            }
+            Operation::SMod => {
+                let a = I256::from_limbs(*self.pop()?.as_limbs());
+                let b = I256::from_limbs(*self.pop()?.as_limbs());
+                if b.is_zero() {
+                    return Err(VMError::DivisionByZero);
+                }
+                self.push(U256::from_limbs(*(a % b).as_limbs()))?;
+            }
             Operation::AddMod => panic!("{}", not_impl_error),
             Operation::MulMod => panic!("{}", not_impl_error),
             Operation::Exp => panic!("{}", not_impl_error),
