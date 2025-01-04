@@ -676,22 +676,17 @@ impl VM {
                 let item_to_duplicate = self.stack[self.stack.len() - item_num].clone();
                 self.push(item_to_duplicate)?;
             }
-            Operation::Swap1 => panic!("{}", not_impl_error),
-            Operation::Swap2 => panic!("{}", not_impl_error),
-            Operation::Swap3 => panic!("{}", not_impl_error),
-            Operation::Swap4 => panic!("{}", not_impl_error),
-            Operation::Swap5 => panic!("{}", not_impl_error),
-            Operation::Swap6 => panic!("{}", not_impl_error),
-            Operation::Swap7 => panic!("{}", not_impl_error),
-            Operation::Swap8 => panic!("{}", not_impl_error),
-            Operation::Swap9 => panic!("{}", not_impl_error),
-            Operation::Swap10 => panic!("{}", not_impl_error),
-            Operation::Swap11 => panic!("{}", not_impl_error),
-            Operation::Swap12 => panic!("{}", not_impl_error),
-            Operation::Swap13 => panic!("{}", not_impl_error),
-            Operation::Swap14 => panic!("{}", not_impl_error),
-            Operation::Swap15 => panic!("{}", not_impl_error),
-            Operation::Swap16 => panic!("{}", not_impl_error),
+            Operation::Swap(item_num) => {
+                let item_num = *item_num as usize;
+                if item_num == 0 || item_num > 16 || item_num > self.stack.len() {
+                    return Err(VMError::StackUnderflow);
+                }
+
+                let stack_len = self.stack.len();
+                let temp = self.stack[stack_len - 1].clone();  // Assuming stack items need to be cloned
+                self.stack[stack_len - 1] = self.stack[stack_len - item_num - 1].clone();
+                self.stack[stack_len - item_num - 1] = temp;
+            }
             Operation::Log0 => panic!("{}", not_impl_error),
             Operation::Log1 => panic!("{}", not_impl_error),
             Operation::Log2 => panic!("{}", not_impl_error),

@@ -140,22 +140,7 @@ pub enum Operation {
     Dup(u8) = 0x80,
 
     // 0x90 - 0x9f: Exchange Operations
-    Swap1 = 0x90,
-    Swap2,
-    Swap3,
-    Swap4,
-    Swap5,
-    Swap6,
-    Swap7,
-    Swap8,
-    Swap9,
-    Swap10,
-    Swap11,
-    Swap12,
-    Swap13,
-    Swap14,
-    Swap15,
-    Swap16,
+    Swap(u8) = 0x90,
 
     // 0xa0 - 0xaf: Logging Operations
     Log0 = 0xa0,
@@ -186,10 +171,9 @@ impl Operation {
             // 0x30 - 0x3f: Environmental Information
             // 0x40 - 0x4f: Block Information
             // 0x50 - 0x5f: Stack, Memory, Storage and Flow
-            // Swap operations (0x90 - 0x9f)
             // 0xa0 - 0xa4: Logging
             // 0xf0 - 0xff: System
-            0x00..0x5f | 0x90..=0x9f | 0xa0..=0xff => {
+            0x00..0x5f | 0xa0..=0xff => {
                 Ok(Operation::from_repr(byte).ok_or(OperationError::InvalidOpcodeFormat)?)
             }
 
@@ -239,8 +223,10 @@ impl Operation {
             }
 
             // Dup operations (0x80 - 0x8f)
-            0x80..=0x8f => Ok(Operation::Dup((byte - 0x80 + 1) as u8)),
+            0x80..=0x8f => Ok(Operation::Dup(byte - 0x80 + 1)),
 
+            // Swap operations (0x90 - 0x9f)
+            0x90..=0x9f => Ok(Operation::Swap(byte - 0x90 + 1)),
             // _ => Err(OperationError::UnknownOpcode),
         }
     }
@@ -521,6 +507,12 @@ impl Operation {
                 min_stack_height: *n as u32,
                 stack_inputs: 0,
                 stack_outputs: 1,
+            },
+
+            Operation::Swap(n) if *n >= 1 && *n <= 16 => StackReq {
+                min_stack_height: (*n + 1) as u32,
+                stack_inputs: 0,
+                stack_outputs: 0,
             },
 
             // Default conservative requirements
