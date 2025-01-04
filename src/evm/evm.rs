@@ -9,6 +9,7 @@ use alloy_rlp::{Encodable, RlpDecodable, RlpEncodable};
 use crate::crypto::hash::hash_slice_to_b256;
 use alloy_primitives::{keccak256, Address, B256, U256};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 const MAX_STACK_SIZE: u32 = 1024;
@@ -58,14 +59,14 @@ impl From<ParserError> for VMError {
 
 #[derive(Clone)]
 pub struct Contract {
-    pub code: Vec<u8>,
+    pub code: Rc<Vec<u8>>,
     pub storage: HashMap<U256, U256>,
 }
 
 impl Contract {
     pub fn new(code: Vec<u8>) -> Self {
         Self {
-            code,
+            code: Rc::new(code),
             storage: HashMap::new(),
         }
     }
@@ -207,8 +208,9 @@ impl VM {
         self.storage_revert.clear();
     }
 
-    pub fn execute_operations(&mut self, code: Vec<u8>) -> Result<ExecutionResult, VMError> {
-        let mut parser = BytecodeParser::new(code);
+    pub fn execute_operations(&mut self) -> Result<ExecutionResult, VMError> {
+        let code_clone = self.contract.code.clone();
+        let mut parser = BytecodeParser::new(code_clone.as_slice());
 
         let mut execution_result = ExecutionResult::Revert {
             reason: vec![],
@@ -287,17 +289,19 @@ impl VM {
         self.state.lock().unwrap().accounts.insert(
             contract_address,
             Account::new(
-                transaction.value,
-                hash_slice_to_b256(transaction.input_data.as_slice()),
+                0,
+                hash_slice_to_b256(&transaction.input_data),
                 B256::ZERO, // TODO: storage root hash?
             ),
         );
 
-        match self.execute_operations(transaction.input_data.clone()) {
+        self.contract.code = Rc::new(transaction.input_data);
+
+        match self.execute_operations() {
             Ok(result) => {
                 if let ExecutionResult::Success { return_data, .. } = result.clone() {
                     self.contract.code =
-                        return_data.ok_or(VMError::InvalidContractCreationResponse)?;
+                        Rc::new(return_data.ok_or(VMError::InvalidContractCreationResponse)?);
                 }
                 Ok(result)
             }
@@ -306,14 +310,23 @@ impl VM {
     }
 
     pub fn call_contract(&mut self, transaction: Transaction) -> Result<ExecutionResult, VMError> {
+        let sender = transaction
+            .get_sender_address()
+            .ok_or(VMError::InvalidTransaction)?;
+
         // extract function selector
         let selector = &transaction.input_data[0..4];
 
-        Ok(ExecutionResult::Success {
-            return_data: None,
-            gas_used: 0,
-            jump_dest: 0,
-        })
+        match self.execute_operations() {
+            Ok(result) => {
+                if let ExecutionResult::Success { return_data, .. } = result.clone() {
+                    self.contract.code =
+                        Rc::new(return_data.ok_or(VMError::InvalidContractCreationResponse)?);
+                }
+                Ok(result)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn stack_size(&self) -> u32 {
@@ -412,7 +425,8 @@ impl VM {
             }
             Operation::CallDataCopy => panic!("{}", not_impl_error),
             Operation::CodeSize => {
-                self.push(U256::from(self.contract.code.len()))?;
+                let code_len = self.contract.code.len();
+                self.push(U256::from(code_len))?;
             }
             Operation::CodeCopy => {
                 let dest_offset = self.pop()?.to::<usize>();
@@ -502,7 +516,7 @@ impl VM {
                 if !jump.is_zero() {
                     if let Operation::JumpDest =
                         Operation::from_byte(self.contract.code[offset], None)
-                            .map_err(|e| VMError::InvalidBytecode)?
+                            .map_err(|_| VMError::InvalidBytecode)?
                     {
                         return Ok(ExecutionResult::Success {
                             return_data: None,
@@ -635,7 +649,6 @@ impl VM {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::hash::hash_string_to_u256;
     use crate::crypto::wallet::Wallet;
     use crate::evm::bytecode_parser::BytecodeParser;
     use crate::transaction::transaction::ETH_TO_WEI;
@@ -645,12 +658,14 @@ mod tests {
     fn test_add_operation() {
         let code = vec![
             Operation::Push1(U256::from(1)).opcode(),
+            1,
             Operation::Push1(U256::from(1)).opcode(),
+            1,
             Operation::Add.opcode(),
         ];
 
         let mut vm = VM::new(
-            Contract::new(code.clone()),
+            Contract::new(code),
             ExecutionContext::new(
                 Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
                 Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
@@ -660,14 +675,12 @@ mod tests {
             ),
             Arc::new(Mutex::new(State::new())),
         );
-        vm.execute_operations(code).unwrap();
+        vm.execute_operations().unwrap();
         assert_eq!(*vm.stack.last().unwrap(), U256::from(2));
     }
 
     #[test]
     fn test_contract_basics() {
-        let parser = BytecodeParser::from("./test/Counter.evm").unwrap();
-
         let sender = Wallet::generate();
         let receiver = Wallet::generate();
 
@@ -678,37 +691,35 @@ mod tests {
         );
 
         let mut vm = VM::new(
-            Contract::new(parser.bytecode.clone()),
+            Contract::new(vec![]),
             ExecutionContext::default(),
             Arc::new(Mutex::new(state)),
         );
 
+        let bytecode = BytecodeParser::read_bytecode_from_file("./test/Counter.evm").unwrap();
         let tx_create = Transaction::new(
             Address::ZERO,
             0,
             1 * ETH_TO_WEI,
             100,
             100,
-            parser.bytecode,
+            bytecode,
             Some(&sender.private_key),
         );
 
         vm.execute_transaction(tx_create).unwrap();
 
         assert_eq!(
-            *vm.contract
-                .storage
-                .get(&U256::from(0))
-                .unwrap(),
+            *vm.contract.storage.get(&U256::ZERO).unwrap(),
             U256::from(10)
         );
 
         // let tx_inc = Transaction::new(
         //     receiver.address,
-        //     100,
-        //     100,
-        //     100,
-        //     100,
+        //     GWEI_TO_WEI,
+        //     30000,
+        //     10000,
+        //     10000,
         //     hash_string_to_u256("inc()").to_be_bytes::<32>()[..4].to_vec(),
         //     Some(&sender.private_key),
         // );
@@ -717,7 +728,7 @@ mod tests {
         //
         // assert_eq!(
         //     *vm.contract.storage.get(&U256::ZERO).unwrap(),
-        //     U256::from(1)
+        //     U256::from(11)
         // );
     }
 
@@ -752,7 +763,7 @@ mod tests {
         );
 
         // Execute the operations in sequence
-        let result = vm.execute_operations(code).unwrap();
+        let result = vm.execute_operations().unwrap();
 
         // Assert that execution resulted in a revert
         // Check that no storage modifications persist after revert

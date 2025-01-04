@@ -17,12 +17,12 @@ impl From<OperationError> for ParserError {
 }
 
 // Structure to handle bytecode parsing
-pub struct BytecodeParser {
-    pub bytecode: Vec<u8>,
+pub struct BytecodeParser<'a> {
+    pub bytecode: &'a [u8],
     pub pc: usize,
 }
 
-impl Iterator for BytecodeParser {
+impl<'a> Iterator for BytecodeParser<'a> {
     type Item = Operation;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -30,16 +30,16 @@ impl Iterator for BytecodeParser {
     }
 }
 
-impl BytecodeParser {
-    pub fn new(bytecode: Vec<u8>) -> Self {
+impl<'a> BytecodeParser<'a> {
+    pub fn new(bytecode: &'a [u8]) -> Self {
         Self { bytecode, pc: 0 }
     }
 
-    pub fn from(filepath: &str) -> Result<Self, std::io::Error> {
+    pub fn read_bytecode_from_file(filepath: &str) -> Result<Vec<u8>, std::io::Error> {
         let content = fs::read_to_string(filepath)?;
         let bytecode = hex::decode(content.trim())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        Ok(Self { bytecode, pc: 0 })
+        Ok(bytecode)
     }
 
     pub fn compile(&mut self) -> Result<Vec<Operation>, ParserError> {
@@ -99,7 +99,7 @@ mod tests {
         let file_path = "./test/Add.evm";
         let bytecode = fs::read(file_path).expect("Failed to read EVM bytecode file");
 
-        let mut parser = BytecodeParser::new(bytecode);
+        let mut parser = BytecodeParser::new(&bytecode);
 
         let operations = parser
             .compile()
