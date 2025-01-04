@@ -262,7 +262,7 @@ impl VM {
         if transaction.to.is_zero() {
             self.call_contract_create(transaction)
         } else {
-            self.call_contract(transaction)
+            self.call_contract()
         }
     }
 
@@ -311,24 +311,8 @@ impl VM {
         }
     }
 
-    pub fn call_contract(&mut self, transaction: Transaction) -> Result<ExecutionResult, VMError> {
-        let sender = transaction
-            .get_sender_address()
-            .ok_or(VMError::InvalidTransaction)?;
-
-        // extract function selector
-        let selector = &transaction.input_data[0..4];
-
-        match self.execute_operations() {
-            Ok(result) => {
-                if let ExecutionResult::Success { return_data, .. } = result.clone() {
-                    self.contract.code =
-                        Rc::new(return_data.ok_or(VMError::InvalidContractCreationResponse)?);
-                }
-                Ok(result)
-            }
-            Err(err) => Err(err),
-        }
+    pub fn call_contract(&mut self) -> Result<ExecutionResult, VMError> {
+        self.execute_operations()
     }
 
     fn stack_size(&self) -> u32 {
@@ -522,7 +506,6 @@ impl VM {
 
                 if i < self.context.data.len() {
                     let slice_end: usize = (i + 32).min(self.context.data.len());
-                    result.copy_from_slice(&self.context.data[i..slice_end]);
                     let dest_end = 32.min(slice_end);
                     result[..dest_end].copy_from_slice(&self.context.data[i..slice_end]);
                 }
@@ -758,9 +741,10 @@ impl VM {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::hash::hash_string_to_u256;
     use crate::crypto::wallet::Wallet;
     use crate::evm::bytecode_parser::BytecodeParser;
-    use crate::transaction::transaction::ETH_TO_WEI;
+    use crate::transaction::transaction::{ETH_TO_WEI, GWEI_TO_WEI};
     use alloy_primitives::hex::FromHex;
 
     #[test]
@@ -823,22 +807,22 @@ mod tests {
             U256::from(10)
         );
 
-        // let tx_inc = Transaction::new(
-        //     receiver.address,
-        //     GWEI_TO_WEI,
-        //     30000,
-        //     10000,
-        //     10000,
-        //     hash_string_to_u256("inc()").to_be_bytes::<32>()[..4].to_vec(),
-        //     Some(&sender.private_key),
-        // );
-        //
-        // vm.execute_transaction(tx_inc).unwrap();
-        //
-        // assert_eq!(
-        //     *vm.contract.storage.get(&U256::ZERO).unwrap(),
-        //     U256::from(11)
-        // );
+        let tx_inc = Transaction::new(
+            receiver.address,
+            GWEI_TO_WEI,
+            30000,
+            10000,
+            10000,
+            hash_string_to_u256("inc()").to_be_bytes::<32>()[..4].to_vec(),
+            Some(&sender.private_key),
+        );
+
+        vm.execute_transaction(tx_inc).unwrap();
+
+        assert_eq!(
+            *vm.contract.storage.get(&U256::ZERO).unwrap(),
+            U256::from(11)
+        );
     }
 
     #[test]

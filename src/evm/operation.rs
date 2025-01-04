@@ -241,7 +241,7 @@ impl Operation {
             // Dup operations (0x80 - 0x8f)
             0x80..=0x8f => Ok(Operation::Dup((byte - 0x80 + 1) as u8)),
 
-            _ => Err(OperationError::UnknownOpcode),
+            // _ => Err(OperationError::UnknownOpcode),
         }
     }
 
@@ -460,7 +460,6 @@ impl Operation {
                 stack_inputs: 1,
                 stack_outputs: 1,
             },
-
 
             Operation::Pop | Operation::Jump => StackReq {
                 min_stack_height: 1,
