@@ -9,6 +9,7 @@ use alloy_rlp::{Encodable, RlpDecodable, RlpEncodable};
 use crate::crypto::hash::hash_slice_to_b256;
 use alloy_primitives::{keccak256, Address, FixedBytes, B256, I256, U256};
 use std::collections::HashMap;
+use std::ops::{Shl, Shr};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -47,6 +48,7 @@ pub enum VMError {
     StackUnderflow,
     NoOperationExecuted,
     InvalidJumpDest,
+    DivisionByZero,
 }
 impl From<ParserError> for VMError {
     fn from(value: ParserError) -> Self {
@@ -417,23 +419,78 @@ impl VM {
             Operation::MulMod => panic!("{}", not_impl_error),
             Operation::Exp => panic!("{}", not_impl_error),
             Operation::SignExtend => panic!("{}", not_impl_error),
-            Operation::Lt => panic!("{}", not_impl_error),
-            Operation::Gt => panic!("{}", not_impl_error),
-            Operation::Slt => panic!("{}", not_impl_error),
-            Operation::Sgt => panic!("{}", not_impl_error),
-            Operation::Eq => panic!("{}", not_impl_error),
+            Operation::Lt => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(U256::from(a < b))?;
+            }
+            Operation::Gt => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(U256::from(a > b))?;
+            }
+            Operation::Slt => {
+                let a = I256::from_limbs(*self.pop()?.as_limbs());
+                let b = I256::from_limbs(*self.pop()?.as_limbs());
+                self.push(U256::from(a < b))?;
+            }
+            Operation::Sgt => {
+                let a = I256::from_limbs(*self.pop()?.as_limbs());
+                let b = I256::from_limbs(*self.pop()?.as_limbs());
+                self.push(U256::from(a > b))?;
+            }
+            Operation::Eq => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(U256::from(a == b))?;
+            }
             Operation::IsZero => {
                 let item = self.pop()?;
                 self.push(U256::from(item.is_zero()))?;
             }
-            Operation::And => panic!("{}", not_impl_error),
-            Operation::Or => panic!("{}", not_impl_error),
-            Operation::Xor => panic!("{}", not_impl_error),
-            Operation::Not => panic!("{}", not_impl_error),
-            Operation::Byte => panic!("{}", not_impl_error),
-            Operation::Shl => panic!("{}", not_impl_error),
-            Operation::Shr => panic!("{}", not_impl_error),
-            Operation::Sar => panic!("{}", not_impl_error),
+            Operation::And => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(a & b)?;
+            }
+            Operation::Or => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(a | b)?;
+            }
+            Operation::Xor => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(a ^ b)?;
+            }
+            Operation::Not => {
+                let a = self.pop()?;
+                self.push(!a)?;
+            }
+            Operation::Byte => {
+                let i = self.pop()?.to::<usize>(); // Byte offset
+                let x = self.pop()?; // 32-byte value
+
+                // Extract the byte at the specified offset, handle out-of-range access
+                let byte = if i < 32 { x.byte(31 - i) } else { 0 };
+                self.push(U256::from(byte))?;
+            }
+            Operation::Shl => {
+                let shift = self.pop()?;
+                let value = self.pop()?;
+                self.push(value << shift)?;
+            }
+            Operation::Shr => {
+                let shift = self.pop()?;
+                let value = self.pop()?;
+                self.push(value >> shift)?;
+            }
+            Operation::Sar => {
+                let shift = self.pop()?.to::<usize>();
+                let value = I256::from_limbs(*self.pop()?.as_limbs());
+                let shifted = value >> shift;
+                self.push(U256::from_limbs(*shifted.as_limbs()))?;
+            }
             Operation::Address => {
                 self.push(U256::from_be_slice(self.context.address.as_slice()))?;
             }
