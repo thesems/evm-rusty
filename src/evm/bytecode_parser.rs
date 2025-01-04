@@ -19,7 +19,15 @@ impl From<OperationError> for ParserError {
 // Structure to handle bytecode parsing
 pub struct BytecodeParser {
     pub bytecode: Vec<u8>,
-    pc: usize,
+    pub pc: usize,
+}
+
+impl Iterator for BytecodeParser {
+    type Item = Operation;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_operation().ok().flatten()
+    }
 }
 
 impl BytecodeParser {

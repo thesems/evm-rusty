@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 contract Counter {
-    uint256 public count;
+    uint256 public count = 10;
 
     // Function to get the current count
     function get() public view returns (uint256) {
