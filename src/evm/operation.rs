@@ -485,7 +485,28 @@ impl Operation {
                 stack_outputs: 0,
             },
 
-            Operation::Add | Operation::Sub | Operation::Mul | Operation::Div => StackReq {
+            Operation::Add
+            | Operation::Sub
+            | Operation::Mul
+            | Operation::Div
+            | Operation::SDiv
+            | Operation::Mod
+            | Operation::SMod
+            | Operation::Exp
+            | Operation::SignExtend
+            | Operation::Lt
+            | Operation::Gt
+            | Operation::Slt
+            | Operation::Sgt
+            | Operation::Eq
+            | Operation::And
+            | Operation::Or
+            | Operation::Xor
+            | Operation::Byte
+            | Operation::Shl
+            | Operation::Shr
+            | Operation::Sar
+            | Operation::Keccak256 => StackReq {
                 min_stack_height: 2,
                 stack_inputs: 2,
                 stack_outputs: 1,
