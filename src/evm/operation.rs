@@ -392,7 +392,7 @@ impl Operation {
     // Get stack requirements for this operation
     pub fn stack_req(&self) -> StackReq {
         match self {
-            Operation::JumpDest => StackReq {
+            Operation::Stop | Operation::JumpDest => StackReq {
                 min_stack_height: 0,
                 stack_inputs: 0,
                 stack_outputs: 0,

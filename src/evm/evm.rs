@@ -9,7 +9,6 @@ use alloy_rlp::{Encodable, RlpDecodable, RlpEncodable};
 use crate::crypto::hash::hash_slice_to_b256;
 use alloy_primitives::{keccak256, Address, FixedBytes, B256, I256, U256};
 use std::collections::HashMap;
-use std::ops::{Shl, Shr};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -21,6 +20,7 @@ pub enum ExecutionResult {
         return_data: Option<Vec<u8>>,
         gas_used: u64,
         jump_dest: usize,
+        halt: bool,
     },
     Revert {
         reason: Vec<u8>,
@@ -220,14 +220,22 @@ impl VM {
         };
 
         while let Some(operation) = parser.next() {
+            // let start = self.stack.len().checked_sub(3).unwrap_or(0);
+            // let values: Vec<U256> = self.stack[start..self.stack.len()].iter().map(|x| x.clone()).collect();
+            // eprintln!("Top 3 stack items: {:?} <-", values);
+            // eprintln!("Executing operation {:?}", operation);
             execution_result = self.process_operation(&operation)?;
 
             self.gas_available -= match execution_result {
                 ExecutionResult::Success {
                     gas_used,
                     jump_dest,
+                    halt,
                     ..
                 } => {
+                    if halt {
+                        return Ok(execution_result);
+                    }
                     if jump_dest != 0 {
                         parser.pc = jump_dest;
                     }
@@ -246,6 +254,7 @@ impl VM {
     ) -> Result<ExecutionResult, VMError> {
         self.stack.clear();
         self.memory.clear();
+        self.storage_revert.clear();
 
         self.context = ExecutionContext::new(
             transaction
@@ -332,14 +341,14 @@ impl VM {
     }
 
     fn jump_to(&mut self, offset: usize) -> Result<ExecutionResult, VMError> {
-        if let Operation::JumpDest =
-            Operation::from_byte(self.contract.code[offset], None)
-                .map_err(|_| VMError::InvalidBytecode)?
+        if let Operation::JumpDest = Operation::from_byte(self.contract.code[offset], None)
+            .map_err(|_| VMError::InvalidBytecode)?
         {
             Ok(ExecutionResult::Success {
                 return_data: None,
                 gas_used: 0,
                 jump_dest: offset,
+                halt: false,
             })
         } else {
             Err(VMError::InvalidJumpDest)
@@ -362,7 +371,14 @@ impl VM {
         let not_impl_error = format!("Operation {:?} is not implemented", operation_name);
 
         match operation {
-            Operation::Stop => panic!("{}", not_impl_error),
+            Operation::Stop => {
+                return Ok(ExecutionResult::Success {
+                    return_data: None,
+                    gas_used: gas_cost.base,
+                    jump_dest: 0,
+                    halt: true,
+                });
+            },
             Operation::Add => {
                 let a = self.pop()?;
                 let b = self.pop()?;
@@ -560,6 +576,7 @@ impl VM {
                     return_data: None,
                     gas_used: gas_cost.base + static_gas + dynamic_gas,
                     jump_dest: 0,
+                    halt: false,
                 });
             }
             Operation::GasPrice => panic!("{}", not_impl_error),
@@ -705,6 +722,7 @@ impl VM {
                     return_data: Some(return_data.to_vec()),
                     gas_used: gas_cost.base,
                     jump_dest: 0,
+                    halt: false,
                 });
             }
             Operation::DelegateCall => panic!("{}", not_impl_error),
@@ -732,6 +750,7 @@ impl VM {
             return_data: None,
             gas_used: gas_cost.base,
             jump_dest: 0,
+            halt: false,
         })
     }
 }
