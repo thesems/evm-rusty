@@ -29,17 +29,7 @@ impl Executor {
         transaction: Transaction,
         state: Arc<Mutex<State>>,
     ) -> Result<(), VMError> {
-        // TODO: unnecessarily wasteful clone on large list
-        let contract = state
-            .lock()
-            .unwrap()
-            .contract
-            .get(&transaction.to)
-            .ok_or(VMError::ContractNotFound)?
-            .clone();
-
         let mut evm = VM::new(
-            contract.clone(),
             ExecutionContext::new(
                 transaction.get_sender_address().unwrap(),
                 transaction.to,
@@ -48,7 +38,7 @@ impl Executor {
                 transaction.gas_limit,
             ),
             state,
-        );
+        )?;
         evm.execute_transaction(transaction)?;
         Ok(())
     }

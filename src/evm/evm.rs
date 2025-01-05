@@ -5,17 +5,18 @@ use crate::evm::evm::VMError::NotEnoughItemsOnStack;
 use crate::evm::operation::Operation;
 use crate::transaction::transaction::Transaction;
 use alloy_rlp::{Encodable, RlpDecodable, RlpEncodable};
+use std::cell::RefCell;
 
 use crate::crypto::hash::hash_slice_to_b256;
 use crate::evm::errors::VMError;
+use crate::evm::execution_context::ExecutionContext;
+use crate::evm::executor::ExecutionResult;
+use crate::evm::memory::Memory;
 use crate::evm::stack::Stack;
 use alloy_primitives::{keccak256, Address, FixedBytes, B256, I256, U256};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use crate::evm::execution_context::ExecutionContext;
-use crate::evm::executor::ExecutionResult;
-use crate::evm::memory::Memory;
 
 #[derive(Debug, RlpEncodable, RlpDecodable, PartialEq)]
 pub struct AddressNonce {
@@ -46,7 +47,6 @@ enum StorageChangeType {
 pub struct VM {
     stack: Stack,
     memory: Memory,
-    contract: Contract,
     gas_available: u64,
     context: ExecutionContext,
     creation_offset: usize,
@@ -55,48 +55,68 @@ pub struct VM {
 }
 
 impl VM {
-    pub fn new(contract: Contract, context: ExecutionContext, state: Arc<Mutex<State>>) -> Self {
-        // Find the runtime code start (look for 0xf3 0xfe sequence)
-        let creation_offset = contract
-            .code
-            .windows(2)
-            .position(|window| window == [0xf3, 0xfe])
-            .map(|pos| pos + 2) // Skip past the f3 fe
-            .unwrap_or(0); // If not found, assume it's all runtime code
-
-        Self {
-            stack: Stack::default(),
-            memory: Memory::default(),
-            contract,
-            gas_available: context.gas,
-            context,
-            creation_offset,
-            state,
-            storage_revert: HashMap::new(),
-        }
+    pub fn contract(&mut self) -> Result<Rc<RefCell<Contract>>, VMError> {
+        // Find the contract based on the context
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .get_contract(&self.context.address)
+            .ok_or(VMError::ContractNotFound)?
+            .clone())
     }
 
-    fn revert_storage(&mut self) {
+    pub fn new(context: ExecutionContext, state: Arc<Mutex<State>>) -> Result<VM, VMError> {
+        // Find the runtime code start (look for 0xf3 0xfe sequence)
+        let mut vm = Self {
+            stack: Stack::default(),
+            memory: Memory::default(),
+            gas_available: context.gas,
+            context,
+            creation_offset: 0,
+            state,
+            storage_revert: HashMap::new(),
+        };
+
+        vm.creation_offset = match vm.contract() {
+            Ok(contract) => {
+                contract
+                    .borrow()
+                    .code
+                    .windows(2)
+                    .position(|window| window == [0xf3, 0xfe])
+                    .map(|pos| pos + 2) // Skip past the f3 fe
+                    .unwrap_or(0) // If not found, assume it's all runtime code
+            }
+            Err(_) => 0,
+        };
+
+        Ok(vm)
+    }
+
+    fn revert_storage(&mut self) -> Result<(), VMError> {
         // Revert all changes made to the storage by replacing current values
         // with the appropriate actions from the storage_revert map.
+        let contract = self.contract()?;
         for (key, (change_type, old_value)) in &self.storage_revert {
             match change_type {
                 StorageChangeType::Set => {
-                    if let Some(storage) = self.contract.storage.get_mut(key) {
+                    if let Some(storage) = contract.borrow_mut().storage.get_mut(key) {
                         *storage = *old_value;
                     }
                 }
                 StorageChangeType::Delete => {
-                    self.contract.storage.remove(key);
+                    contract.borrow_mut().storage.remove(key);
                 }
             }
         }
         // Clear the storage_revert map after reverting changes.
         self.storage_revert.clear();
+        Ok(())
     }
 
     pub fn execute_operations(&mut self) -> Result<ExecutionResult, VMError> {
-        let code_clone = self.contract.code.clone();
+        let code_clone = self.contract()?.borrow().code.clone();
         let mut parser = BytecodeParser::new(code_clone.as_slice());
 
         let mut execution_result = ExecutionResult::Revert {
@@ -182,21 +202,25 @@ impl VM {
         let contract_address = self.generate_contract_address(sender, transaction.nonce);
         self.context.address = contract_address;
 
-        self.state.lock().unwrap().accounts.insert(
-            contract_address,
-            Account::new(
-                0,
-                hash_slice_to_b256(&transaction.input_data),
-                B256::ZERO, // TODO: storage root hash?
-            ),
-        );
+        {
+            let mut state = self.state.lock().unwrap();
 
-        self.contract.code = Rc::new(transaction.input_data);
+            state.accounts.insert(
+                contract_address,
+                Account::new(
+                    0,
+                    hash_slice_to_b256(&transaction.input_data),
+                    B256::ZERO, // TODO: storage root hash?
+                ),
+            );
+
+            state.set_contract(contract_address, Rc::new(RefCell::new(Contract::new(transaction.input_data))))
+        }
 
         match self.execute_operations() {
             Ok(result) => {
                 if let ExecutionResult::Success { return_data, .. } = result.clone() {
-                    self.contract.code =
+                    self.contract()?.borrow_mut().code =
                         Rc::new(return_data.ok_or(VMError::InvalidContractCreationResponse)?);
                 }
                 Ok(result)
@@ -210,8 +234,9 @@ impl VM {
     }
 
     fn jump_to(&mut self, offset: usize) -> Result<ExecutionResult, VMError> {
-        if let Operation::JumpDest = Operation::from_byte(self.contract.code[offset], None)
-            .map_err(|_| VMError::InvalidBytecode)?
+        if let Operation::JumpDest =
+            Operation::from_byte(self.contract()?.borrow().code[offset], None)
+                .map_err(|_| VMError::InvalidBytecode)?
         {
             Ok(ExecutionResult::Success {
                 return_data: None,
@@ -372,10 +397,12 @@ impl VM {
                 self.stack.push(U256::from_limbs(*shifted.as_limbs()))?;
             }
             Operation::Address => {
-                self.stack.push(U256::from_be_slice(self.context.address.as_slice()))?;
+                self.stack
+                    .push(U256::from_be_slice(self.context.address.as_slice()))?;
             }
             Operation::Balance => {
-                let address = Address::from_word(FixedBytes::from(self.stack.pop()?.to_be_bytes::<32>()));
+                let address =
+                    Address::from_word(FixedBytes::from(self.stack.pop()?.to_be_bytes::<32>()));
 
                 let balance = self
                     .state
@@ -388,10 +415,12 @@ impl VM {
                 self.stack.push(balance)?;
             }
             Operation::Origin => {
-                self.stack.push(U256::from_be_slice(self.context.caller.as_slice()))?;
+                self.stack
+                    .push(U256::from_be_slice(self.context.caller.as_slice()))?;
             }
             Operation::Caller => {
-                self.stack.push(U256::from_be_slice(self.context.caller.as_slice()))?;
+                self.stack
+                    .push(U256::from_be_slice(self.context.caller.as_slice()))?;
             }
             Operation::CallValue => {
                 self.stack.push(U256::from(self.context.value))?;
@@ -413,7 +442,7 @@ impl VM {
             }
             Operation::CallDataCopy => panic!("{}", not_impl_error),
             Operation::CodeSize => {
-                let code_len = self.contract.code.len();
+                let code_len = self.contract()?.borrow().code.len();
                 self.stack.push(U256::from(code_len))?;
             }
             Operation::CodeCopy => {
@@ -429,12 +458,13 @@ impl VM {
                     return Err(VMError::OutOfGas);
                 }
 
-                self.memory.expand_memory(dest_offset, size, self.gas_available)?;
+                self.memory
+                    .expand_memory(dest_offset, size, self.gas_available)?;
 
                 // Get the raw bytecode slice
                 for i in 0..size {
-                    let byte = if offset + i < self.contract.code.len() {
-                        self.contract.code[offset + i] // Copy raw byte directly
+                    let byte = if offset + i < self.contract()?.borrow().code.len() {
+                        self.contract()?.borrow_mut().code[offset + i] // Copy raw byte directly
                     } else {
                         0 // For out-of-bound bytes, pad with 0
                     };
@@ -476,7 +506,8 @@ impl VM {
             Operation::SLoad => {
                 let key = self.stack.pop()?; // Get the storage key from the stack
                 let value = self
-                    .contract
+                    .contract()?
+                    .borrow()
                     .storage
                     .get(&key)
                     .cloned()
@@ -487,7 +518,11 @@ impl VM {
                 let storage_key = self.stack.pop()?;
                 let storage_value = self.stack.pop()?;
 
-                let prev_value = self.contract.storage.insert(storage_key, storage_value);
+                let prev_value = self
+                    .contract()?
+                    .borrow_mut()
+                    .storage
+                    .insert(storage_key, storage_value);
 
                 if prev_value.is_none() {
                     self.storage_revert
@@ -588,7 +623,7 @@ impl VM {
                 let length = self.stack.pop()?.to::<usize>();
                 let offset = self.stack.pop()?.to::<usize>();
 
-                self.revert_storage();
+                self.revert_storage()?;
                 let revert_data = self.memory.read(offset, length);
 
                 // Return the revert result
@@ -630,17 +665,16 @@ mod tests {
             Operation::Add.opcode(),
         ];
 
-        let mut vm = VM::new(
-            Contract::new(code),
-            ExecutionContext::new(
-                Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
-                Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
-                0,
-                vec![],
-                21000,
-            ),
-            Arc::new(Mutex::new(State::new())),
-        );
+        let to = Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap();
+        let sender = to.clone();
+
+        let state = Arc::new(Mutex::new(State::new()));
+        state
+            .lock()
+            .unwrap()
+            .set_contract(to, Rc::new(RefCell::new(Contract::new(code))));
+
+        let mut vm = VM::new(ExecutionContext::new(sender, to, 0, vec![], 21000), state).unwrap();
         vm.execute_operations().unwrap();
         assert_eq!(*vm.stack.top().unwrap(), U256::from(2));
     }
@@ -648,19 +682,14 @@ mod tests {
     #[test]
     fn test_contract_basics() {
         let sender = Wallet::generate();
-        let receiver = Wallet::generate();
 
-        let mut state = State::new();
-        state.set_account(
+        let mut state = Arc::new(Mutex::new(State::new()));
+        state.lock().unwrap().set_account(
             sender.address,
             Account::new(2 * ETH_TO_WEI, B256::ZERO, B256::ZERO),
         );
 
-        let mut vm = VM::new(
-            Contract::new(vec![]),
-            ExecutionContext::default(),
-            Arc::new(Mutex::new(state)),
-        );
+        let mut vm = VM::new(ExecutionContext::default(), state.clone()).unwrap();
 
         let bytecode = BytecodeParser::read_bytecode_from_file("./test/Counter.evm").unwrap();
         let tx_create = Transaction::new(
@@ -676,12 +705,18 @@ mod tests {
         vm.execute_transaction(tx_create).unwrap();
 
         assert_eq!(
-            *vm.contract.storage.get(&U256::ZERO).unwrap(),
+            *vm.contract()
+                .unwrap()
+                .borrow()
+                .storage
+                .get(&U256::ZERO)
+                .unwrap(),
             U256::from(10)
         );
 
+        let contract_address = state.lock().unwrap().contract.keys().next().unwrap().clone();
         let tx_inc = Transaction::new(
-            receiver.address,
+            contract_address,
             GWEI_TO_WEI,
             30000,
             10000,
@@ -693,7 +728,12 @@ mod tests {
         vm.execute_transaction(tx_inc).unwrap();
 
         assert_eq!(
-            *vm.contract.storage.get(&U256::ZERO).unwrap(),
+            *vm.contract()
+                .unwrap()
+                .borrow()
+                .storage
+                .get(&U256::ZERO)
+                .unwrap(),
             U256::from(11)
         );
     }
@@ -716,17 +756,20 @@ mod tests {
             Operation::Revert.opcode(), // Trigger revert
         ];
 
+        let to = Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap();
+        let sender = to.clone();
+
+        let state = Arc::new(Mutex::new(State::new()));
+        state
+            .lock()
+            .unwrap()
+            .set_contract(to, Rc::new(RefCell::new(Contract::new(code))));
+
         let mut vm = VM::new(
-            Contract::new(code.clone()),
-            ExecutionContext::new(
-                Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
-                Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
-                ETH_TO_WEI,
-                vec![],
-                ETH_TO_WEI,
-            ),
-            Arc::new(Mutex::new(State::new())),
-        );
+            ExecutionContext::new(sender, to, ETH_TO_WEI, vec![], ETH_TO_WEI),
+            state,
+        )
+        .unwrap();
 
         // Execute the operations in sequence
         let result = vm.execute_operations().unwrap();
@@ -734,7 +777,7 @@ mod tests {
         // Assert that execution resulted in a revert
         // Check that no storage modifications persist after revert
         let key = U256::from(0);
-        assert_eq!(vm.contract.storage.get(&key), None);
+        assert_eq!(vm.contract().unwrap().borrow().storage.get(&key), None);
         assert!(
             matches!(result, ExecutionResult::Revert { .. }),
             "Expected a revert operation."

@@ -1,5 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
-
+use std::rc::Rc;
 use crate::block::account::Account;
 use crate::evm::evm::Contract;
 use alloy_primitives::{Address, B256};
@@ -7,7 +8,7 @@ use alloy_primitives::{Address, B256};
 pub struct State {
     pub accounts: HashMap<Address, Account>,
     pub storage: HashMap<(Address, B256), B256>,
-    pub contract: HashMap<Address, Contract>,
+    pub contract: HashMap<Address, Rc<RefCell<Contract>>>,
 }
 
 impl Default for State {
@@ -42,6 +43,14 @@ impl State {
 
     pub fn set_storage(&mut self, address: Address, key: B256, value: B256) {
         self.storage.insert((address, key), value);
+    }
+
+    pub fn get_contract(&self, address: &Address) -> Option<&Rc<RefCell<Contract>>> {
+        self.contract.get(address)
+    }
+
+    pub fn set_contract(&mut self, address: Address, contract: Rc<RefCell<Contract>>) {
+        self.contract.insert(address, contract);
     }
 }
 
