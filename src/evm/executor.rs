@@ -1,10 +1,11 @@
 use crate::block::account::Account;
 use crate::block::state::State;
-use crate::evm::evm::{ExecutionContext, VMError, VM};
+use crate::evm::evm::{ExecutionContext, VM};
 use crate::transaction::errors::TransactionError;
 use crate::transaction::transaction::{Transaction, TRANSACTION_GAS_COST};
 use alloy_primitives::B256;
 use std::sync::{Arc, Mutex};
+use crate::evm::errors::VMError;
 
 pub struct Executor;
 

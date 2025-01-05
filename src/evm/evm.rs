@@ -1,18 +1,18 @@
 use crate::block::account::Account;
 use crate::block::state::State;
-use crate::evm::bytecode_parser::{BytecodeParser, ParserError};
-use crate::evm::evm::VMError::{NoItemsOnStack, NotEnoughItemsOnStack, StackFull};
+use crate::evm::bytecode_parser::BytecodeParser;
+use crate::evm::evm::VMError::NotEnoughItemsOnStack;
 use crate::evm::operation::Operation;
 use crate::transaction::transaction::Transaction;
 use alloy_rlp::{Encodable, RlpDecodable, RlpEncodable};
 
 use crate::crypto::hash::hash_slice_to_b256;
+use crate::evm::errors::VMError;
+use crate::evm::stack::Stack;
 use alloy_primitives::{keccak256, Address, FixedBytes, B256, I256, U256};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-
-const MAX_STACK_SIZE: u32 = 1024;
 
 #[derive(Clone)]
 pub enum ExecutionResult {
@@ -32,31 +32,6 @@ pub enum ExecutionResult {
 pub struct AddressNonce {
     pub address: Vec<u8>,
     pub nonce: u64,
-}
-
-#[derive(Debug, Clone)]
-pub enum VMError {
-    StackFull,
-    NotEnoughItemsOnStack(String),
-    NoItemsOnStack,
-    NotImplemented,
-    ContractNotFound,
-    InvalidTransaction,
-    InvalidBytecode,
-    InvalidContractCreationResponse,
-    OutOfGas,
-    StackUnderflow,
-    NoOperationExecuted,
-    InvalidJumpDest,
-    DivisionByZero,
-}
-impl From<ParserError> for VMError {
-    fn from(value: ParserError) -> Self {
-        match value {
-            ParserError::IncompletePush => VMError::InvalidBytecode,
-            _ => VMError::InvalidTransaction,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -112,7 +87,7 @@ enum StorageChangeType {
 }
 
 pub struct VM {
-    stack: Vec<U256>,
+    stack: Stack,
     memory: Vec<u8>,
     contract: Contract,
     gas_available: u64,
@@ -133,7 +108,7 @@ impl VM {
             .unwrap_or(0); // If not found, assume it's all runtime code
 
         Self {
-            stack: Vec::new(),
+            stack: Stack::default(),
             memory: vec![],
             contract,
             gas_available: context.gas,
@@ -324,22 +299,6 @@ impl VM {
         self.execute_operations()
     }
 
-    fn stack_size(&self) -> u32 {
-        self.stack.len() as u32
-    }
-
-    fn push(&mut self, value: U256) -> Result<(), VMError> {
-        if self.stack_size() >= MAX_STACK_SIZE {
-            return Err(StackFull);
-        }
-        self.stack.push(value);
-        Ok(())
-    }
-
-    fn pop(&mut self) -> Result<U256, VMError> {
-        self.stack.pop().ok_or(NoItemsOnStack)
-    }
-
     fn jump_to(&mut self, offset: usize) -> Result<ExecutionResult, VMError> {
         if let Operation::JumpDest = Operation::from_byte(self.contract.code[offset], None)
             .map_err(|_| VMError::InvalidBytecode)?
@@ -359,7 +318,7 @@ impl VM {
         let stack_req = operation.stack_req();
         let operation_name = format!("{:?}", operation);
 
-        if self.stack_size() < stack_req.min_stack_height {
+        if self.stack.stack_size() < stack_req.min_stack_height as usize {
             return Err(NotEnoughItemsOnStack(operation_name));
         }
 
@@ -378,135 +337,135 @@ impl VM {
                     jump_dest: 0,
                     halt: true,
                 });
-            },
+            }
             Operation::Add => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(a + b)?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(a + b)?;
             }
             Operation::Mul => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(a * b)?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(a * b)?;
             }
             Operation::Sub => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(a - b)?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(a - b)?;
             }
             Operation::Div => {
-                let a = self.pop()?;
-                let b = self.pop()?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
                 if b.is_zero() {
                     return Err(VMError::DivisionByZero);
                 }
-                self.push(a / b)?;
+                self.stack.push(a / b)?;
             }
             Operation::SDiv => {
-                let a = I256::from_limbs(*self.pop()?.as_limbs());
-                let b = I256::from_limbs(*self.pop()?.as_limbs());
+                let a = I256::from_limbs(*self.stack.pop()?.as_limbs());
+                let b = I256::from_limbs(*self.stack.pop()?.as_limbs());
                 if b.is_zero() {
                     return Err(VMError::DivisionByZero);
                 }
-                self.push(U256::from_limbs(*(a / b).as_limbs()))?;
+                self.stack.push(U256::from_limbs(*(a / b).as_limbs()))?;
             }
             Operation::Mod => {
-                let a = self.pop()?;
-                let b = self.pop()?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
                 if b.is_zero() {
                     return Err(VMError::DivisionByZero);
                 }
-                self.push(a % b)?;
+                self.stack.push(a % b)?;
             }
             Operation::SMod => {
-                let a = I256::from_limbs(*self.pop()?.as_limbs());
-                let b = I256::from_limbs(*self.pop()?.as_limbs());
+                let a = I256::from_limbs(*self.stack.pop()?.as_limbs());
+                let b = I256::from_limbs(*self.stack.pop()?.as_limbs());
                 if b.is_zero() {
                     return Err(VMError::DivisionByZero);
                 }
-                self.push(U256::from_limbs(*(a % b).as_limbs()))?;
+                self.stack.push(U256::from_limbs(*(a % b).as_limbs()))?;
             }
             Operation::AddMod => panic!("{}", not_impl_error),
             Operation::MulMod => panic!("{}", not_impl_error),
             Operation::Exp => panic!("{}", not_impl_error),
             Operation::SignExtend => panic!("{}", not_impl_error),
             Operation::Lt => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(U256::from(a < b))?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(U256::from(a < b))?;
             }
             Operation::Gt => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(U256::from(a > b))?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(U256::from(a > b))?;
             }
             Operation::Slt => {
-                let a = I256::from_limbs(*self.pop()?.as_limbs());
-                let b = I256::from_limbs(*self.pop()?.as_limbs());
-                self.push(U256::from(a < b))?;
+                let a = I256::from_limbs(*self.stack.pop()?.as_limbs());
+                let b = I256::from_limbs(*self.stack.pop()?.as_limbs());
+                self.stack.push(U256::from(a < b))?;
             }
             Operation::Sgt => {
-                let a = I256::from_limbs(*self.pop()?.as_limbs());
-                let b = I256::from_limbs(*self.pop()?.as_limbs());
-                self.push(U256::from(a > b))?;
+                let a = I256::from_limbs(*self.stack.pop()?.as_limbs());
+                let b = I256::from_limbs(*self.stack.pop()?.as_limbs());
+                self.stack.push(U256::from(a > b))?;
             }
             Operation::Eq => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(U256::from(a == b))?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(U256::from(a == b))?;
             }
             Operation::IsZero => {
-                let item = self.pop()?;
-                self.push(U256::from(item.is_zero()))?;
+                let item = self.stack.pop()?;
+                self.stack.push(U256::from(item.is_zero()))?;
             }
             Operation::And => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(a & b)?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(a & b)?;
             }
             Operation::Or => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(a | b)?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(a | b)?;
             }
             Operation::Xor => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(a ^ b)?;
+                let a = self.stack.pop()?;
+                let b = self.stack.pop()?;
+                self.stack.push(a ^ b)?;
             }
             Operation::Not => {
-                let a = self.pop()?;
-                self.push(!a)?;
+                let a = self.stack.pop()?;
+                self.stack.push(!a)?;
             }
             Operation::Byte => {
-                let i = self.pop()?.to::<usize>(); // Byte offset
-                let x = self.pop()?; // 32-byte value
+                let i = self.stack.pop()?.to::<usize>(); // Byte offset
+                let x = self.stack.pop()?; // 32-byte value
 
                 // Extract the byte at the specified offset, handle out-of-range access
                 let byte = if i < 32 { x.byte(31 - i) } else { 0 };
-                self.push(U256::from(byte))?;
+                self.stack.push(U256::from(byte))?;
             }
             Operation::Shl => {
-                let shift = self.pop()?;
-                let value = self.pop()?;
-                self.push(value << shift)?;
+                let shift = self.stack.pop()?;
+                let value = self.stack.pop()?;
+                self.stack.push(value << shift)?;
             }
             Operation::Shr => {
-                let shift = self.pop()?;
-                let value = self.pop()?;
-                self.push(value >> shift)?;
+                let shift = self.stack.pop()?;
+                let value = self.stack.pop()?;
+                self.stack.push(value >> shift)?;
             }
             Operation::Sar => {
-                let shift = self.pop()?.to::<usize>();
-                let value = I256::from_limbs(*self.pop()?.as_limbs());
+                let shift = self.stack.pop()?.to::<usize>();
+                let value = I256::from_limbs(*self.stack.pop()?.as_limbs());
                 let shifted = value >> shift;
-                self.push(U256::from_limbs(*shifted.as_limbs()))?;
+                self.stack.push(U256::from_limbs(*shifted.as_limbs()))?;
             }
             Operation::Address => {
-                self.push(U256::from_be_slice(self.context.address.as_slice()))?;
+                self.stack.push(U256::from_be_slice(self.context.address.as_slice()))?;
             }
             Operation::Balance => {
-                let address = Address::from_word(FixedBytes::from(self.pop()?.to_be_bytes::<32>()));
+                let address = Address::from_word(FixedBytes::from(self.stack.pop()?.to_be_bytes::<32>()));
 
                 let balance = self
                     .state
@@ -516,19 +475,19 @@ impl VM {
                     .get(&address)
                     .map_or(U256::ZERO, |account| U256::from(account.balance));
 
-                self.push(balance)?;
+                self.stack.push(balance)?;
             }
             Operation::Origin => {
-                self.push(U256::from_be_slice(self.context.caller.as_slice()))?;
+                self.stack.push(U256::from_be_slice(self.context.caller.as_slice()))?;
             }
             Operation::Caller => {
-                self.push(U256::from_be_slice(self.context.caller.as_slice()))?;
+                self.stack.push(U256::from_be_slice(self.context.caller.as_slice()))?;
             }
             Operation::CallValue => {
-                self.push(U256::from(self.context.value))?;
+                self.stack.push(U256::from(self.context.value))?;
             }
             Operation::CallDataLoad => {
-                let i = self.pop()?.to::<usize>();
+                let i = self.stack.pop()?.to::<usize>();
                 let mut result = [0u8; 32];
 
                 if i < self.context.data.len() {
@@ -537,20 +496,20 @@ impl VM {
                     result[..dest_end].copy_from_slice(&self.context.data[i..slice_end]);
                 }
 
-                self.push(U256::from_be_slice(&result))?;
+                self.stack.push(U256::from_be_slice(&result))?;
             }
             Operation::CallDataSize => {
-                self.push(U256::from(self.context.data.len()))?;
+                self.stack.push(U256::from(self.context.data.len()))?;
             }
             Operation::CallDataCopy => panic!("{}", not_impl_error),
             Operation::CodeSize => {
                 let code_len = self.contract.code.len();
-                self.push(U256::from(code_len))?;
+                self.stack.push(U256::from(code_len))?;
             }
             Operation::CodeCopy => {
-                let dest_offset = self.pop()?.to::<usize>();
-                let offset = self.pop()?.to::<usize>();
-                let size = self.pop()?.to::<usize>();
+                let dest_offset = self.stack.pop()?.to::<usize>();
+                let offset = self.stack.pop()?.to::<usize>();
+                let size = self.stack.pop()?.to::<usize>();
 
                 let minimum_word_size = (size as u64 + 31) / 32;
                 let static_gas = 3;
@@ -595,28 +554,28 @@ impl VM {
             Operation::SelfBalance => panic!("{}", not_impl_error),
             Operation::BaseFee => panic!("{}", not_impl_error),
             Operation::Pop => {
-                self.pop()?; // Simply discard the value at the top of the stack
+                self.stack.pop()?; // Simply discard the value at the top of the stack
             }
             Operation::MLoad => panic!("{}", not_impl_error),
             Operation::MStore => {
-                let offset = self.pop()?.to::<usize>();
-                let value = self.pop()?;
+                let offset = self.stack.pop()?.to::<usize>();
+                let value = self.stack.pop()?;
                 self.load_into_memory(offset, value)?;
             }
             Operation::MStore8 => panic!("{}", not_impl_error),
             Operation::SLoad => {
-                let key = self.pop()?; // Get the storage key from the stack
+                let key = self.stack.pop()?; // Get the storage key from the stack
                 let value = self
                     .contract
                     .storage
                     .get(&key)
                     .cloned()
                     .unwrap_or(U256::ZERO);
-                self.push(value)?;
+                self.stack.push(value)?;
             }
             Operation::SStore => {
-                let storage_key = self.pop()?;
-                let storage_value = self.pop()?;
+                let storage_key = self.stack.pop()?;
+                let storage_value = self.stack.pop()?;
 
                 let prev_value = self.contract.storage.insert(storage_key, storage_value);
 
@@ -629,12 +588,12 @@ impl VM {
                 }
             }
             Operation::Jump => {
-                let offset = self.pop()?.to::<usize>();
+                let offset = self.stack.pop()?.to::<usize>();
                 return self.jump_to(offset);
             }
             Operation::JumpI => {
-                let offset = self.pop()?.to::<usize>();
-                let jump = self.pop()?;
+                let offset = self.stack.pop()?.to::<usize>();
+                let jump = self.stack.pop()?;
 
                 if !jump.is_zero() {
                     return self.jump_to(offset);
@@ -649,7 +608,7 @@ impl VM {
                 // No changes are made to the stack, memory, or storage.
             }
             Operation::Push0 => {
-                self.push(U256::ZERO)?;
+                self.stack.push(U256::ZERO)?;
             }
             Operation::Push1(value)
             | Operation::Push2(value)
@@ -683,26 +642,13 @@ impl VM {
             | Operation::Push30(value)
             | Operation::Push31(value)
             | Operation::Push32(value) => {
-                self.push(*value)?;
+                self.stack.push(*value)?;
             }
             Operation::Dup(item_num) => {
-                let item_num = *item_num as usize;
-                if item_num == 0 || item_num > self.stack.len() {
-                    return Err(VMError::StackUnderflow);
-                }
-                let item_to_duplicate = self.stack[self.stack.len() - item_num].clone();
-                self.push(item_to_duplicate)?;
+                self.stack.duplicate(*item_num as usize)?;
             }
             Operation::Swap(item_num) => {
-                let item_num = *item_num as usize;
-                if item_num == 0 || item_num > 16 || item_num > self.stack.len() {
-                    return Err(VMError::StackUnderflow);
-                }
-
-                let stack_len = self.stack.len();
-                let temp = self.stack[stack_len - 1].clone();  // Assuming stack items need to be cloned
-                self.stack[stack_len - 1] = self.stack[stack_len - item_num - 1].clone();
-                self.stack[stack_len - item_num - 1] = temp;
+                self.stack.swap(*item_num as usize)?;
             }
             Operation::Log0 => panic!("{}", not_impl_error),
             Operation::Log1 => panic!("{}", not_impl_error),
@@ -713,8 +659,8 @@ impl VM {
             Operation::Call => panic!("{}", not_impl_error),
             Operation::CallCode => panic!("{}", not_impl_error),
             Operation::Return => {
-                let offset = self.pop()?.to::<usize>();
-                let size = self.pop()?.to::<usize>();
+                let offset = self.stack.pop()?.to::<usize>();
+                let size = self.stack.pop()?.to::<usize>();
 
                 let return_data = self.read_from_memory(offset, size);
 
@@ -729,8 +675,8 @@ impl VM {
             Operation::Create2 => panic!("{}", not_impl_error),
             Operation::StaticCall => panic!("{}", not_impl_error),
             Operation::Revert => {
-                let length = self.pop()?.to::<usize>();
-                let offset = self.pop()?.to::<usize>();
+                let length = self.stack.pop()?.to::<usize>();
+                let offset = self.stack.pop()?.to::<usize>();
 
                 self.revert_storage();
                 let revert_data = self.read_from_memory(offset, length);
@@ -781,12 +727,12 @@ mod tests {
                 Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap(),
                 0,
                 vec![],
-                0,
+                21000,
             ),
             Arc::new(Mutex::new(State::new())),
         );
         vm.execute_operations().unwrap();
-        assert_eq!(*vm.stack.last().unwrap(), U256::from(2));
+        assert_eq!(*vm.stack.top().unwrap(), U256::from(2));
     }
 
     #[test]
