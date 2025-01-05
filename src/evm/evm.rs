@@ -15,6 +15,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use crate::evm::execution_context::ExecutionContext;
 use crate::evm::executor::ExecutionResult;
+use crate::evm::memory::Memory;
 
 #[derive(Debug, RlpEncodable, RlpDecodable, PartialEq)]
 pub struct AddressNonce {
@@ -44,7 +45,7 @@ enum StorageChangeType {
 
 pub struct VM {
     stack: Stack,
-    memory: Vec<u8>,
+    memory: Memory,
     contract: Contract,
     gas_available: u64,
     context: ExecutionContext,
@@ -65,7 +66,7 @@ impl VM {
 
         Self {
             stack: Stack::default(),
-            memory: vec![],
+            memory: Memory::default(),
             contract,
             gas_available: context.gas,
             context,
@@ -73,53 +74,6 @@ impl VM {
             state,
             storage_revert: HashMap::new(),
         }
-    }
-
-    fn load_into_memory(&mut self, offset: usize, value: U256) -> Result<(), VMError> {
-        let bytes = value.to_be_bytes::<32>();
-        self.expand_memory(offset, 32)?;
-        self.memory[offset..offset + 32].copy_from_slice(&bytes);
-        Ok(())
-    }
-
-    fn expand_memory(&mut self, offset: usize, required_size: usize) -> Result<(), VMError> {
-        let new_size = offset + required_size;
-        if self.memory.len() < new_size {
-            if Self::calc_memory_expansion_gas(offset + 32) < self.gas_available {
-                self.memory.resize(new_size, 0);
-            } else {
-                return Err(VMError::OutOfGas);
-            }
-        }
-        Ok(())
-    }
-
-    /// Calculates the gas cost for expanding the memory to the given size.
-    ///
-    /// # Arguments
-    ///
-    /// * `memory_byte_size` - The size in bytes of the memory to expand to.
-    ///
-    /// # Returns
-    ///
-    /// The calculated gas cost for the memory expansion.
-    ///
-    /// The gas cost is calculated based on the EVM formula:
-    /// - The word size is the memory size rounded up to the nearest multiple of 32.
-    /// - The memory cost combines a quadratic term and a linear term:
-    ///   - Quadratic term: `(memory_size_word^2) / 512`
-    ///   - Linear term: `3 * memory_size_word`
-    fn calc_memory_expansion_gas(memory_byte_size: usize) -> u64 {
-        let memory_size_word = (memory_byte_size + 31) / 32;
-        let memory_cost = (memory_size_word * memory_size_word / 512) + (3 * memory_size_word);
-        memory_cost as u64
-    }
-
-    fn read_from_memory(&mut self, offset: usize, length: usize) -> &[u8] {
-        if self.memory.len() < offset + length {
-            self.memory.resize(offset + length, 0);
-        }
-        &self.memory[offset..offset + length]
     }
 
     fn revert_storage(&mut self) {
@@ -469,13 +423,13 @@ impl VM {
 
                 let minimum_word_size = (size as u64 + 31) / 32;
                 let static_gas = 3;
-                let dynamic_gas = 3 * minimum_word_size + Self::calc_memory_expansion_gas(size);
+                let dynamic_gas = 3 * minimum_word_size + Memory::calc_memory_expansion_gas(size);
 
                 if self.gas_available < gas_cost.base + static_gas + dynamic_gas {
                     return Err(VMError::OutOfGas);
                 }
 
-                self.expand_memory(dest_offset, size)?;
+                self.memory.expand_memory(dest_offset, size, self.gas_available)?;
 
                 // Get the raw bytecode slice
                 for i in 0..size {
@@ -484,7 +438,7 @@ impl VM {
                     } else {
                         0 // For out-of-bound bytes, pad with 0
                     };
-                    self.memory[dest_offset + i] = byte;
+                    self.memory.set(dest_offset + i, byte)?;
                 }
 
                 return Ok(ExecutionResult::Success {
@@ -516,7 +470,7 @@ impl VM {
             Operation::MStore => {
                 let offset = self.stack.pop()?.to::<usize>();
                 let value = self.stack.pop()?;
-                self.load_into_memory(offset, value)?;
+                self.memory.write(offset, value, self.gas_available)?;
             }
             Operation::MStore8 => panic!("{}", not_impl_error),
             Operation::SLoad => {
@@ -618,7 +572,7 @@ impl VM {
                 let offset = self.stack.pop()?.to::<usize>();
                 let size = self.stack.pop()?.to::<usize>();
 
-                let return_data = self.read_from_memory(offset, size);
+                let return_data = self.memory.read(offset, size);
 
                 return Ok(ExecutionResult::Success {
                     return_data: Some(return_data.to_vec()),
@@ -635,7 +589,7 @@ impl VM {
                 let offset = self.stack.pop()?.to::<usize>();
 
                 self.revert_storage();
-                let revert_data = self.read_from_memory(offset, length);
+                let revert_data = self.memory.read(offset, length);
 
                 // Return the revert result
                 return Ok(ExecutionResult::Revert {
