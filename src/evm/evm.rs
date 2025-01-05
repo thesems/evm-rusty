@@ -13,20 +13,8 @@ use alloy_primitives::{keccak256, Address, FixedBytes, B256, I256, U256};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-
-#[derive(Clone)]
-pub enum ExecutionResult {
-    Success {
-        return_data: Option<Vec<u8>>,
-        gas_used: u64,
-        jump_dest: usize,
-        halt: bool,
-    },
-    Revert {
-        reason: Vec<u8>,
-        gas_used: u64,
-    },
-}
+use crate::evm::execution_context::ExecutionContext;
+use crate::evm::executor::ExecutionResult;
 
 #[derive(Debug, RlpEncodable, RlpDecodable, PartialEq)]
 pub struct AddressNonce {
@@ -45,38 +33,6 @@ impl Contract {
         Self {
             code: Rc::new(code),
             storage: HashMap::new(),
-        }
-    }
-}
-
-pub struct ExecutionContext {
-    caller: Address,
-    address: Address,
-    value: u64,
-    data: Vec<u8>,
-    gas: u64,
-}
-
-impl Default for ExecutionContext {
-    fn default() -> Self {
-        Self {
-            caller: Address::ZERO,
-            address: Address::ZERO,
-            value: 0,
-            data: Vec::new(),
-            gas: 0,
-        }
-    }
-}
-
-impl ExecutionContext {
-    pub fn new(caller: Address, address: Address, value: u64, data: Vec<u8>, gas: u64) -> Self {
-        Self {
-            caller,
-            address,
-            value,
-            data,
-            gas,
         }
     }
 }

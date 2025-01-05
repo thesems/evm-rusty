@@ -1,11 +1,26 @@
 use crate::block::account::Account;
 use crate::block::state::State;
-use crate::evm::evm::{ExecutionContext, VM};
+use crate::evm::errors::VMError;
+use crate::evm::evm::VM;
+use crate::evm::execution_context::ExecutionContext;
 use crate::transaction::errors::TransactionError;
 use crate::transaction::transaction::{Transaction, TRANSACTION_GAS_COST};
 use alloy_primitives::B256;
 use std::sync::{Arc, Mutex};
-use crate::evm::errors::VMError;
+
+#[derive(Clone)]
+pub enum ExecutionResult {
+    Success {
+        return_data: Option<Vec<u8>>,
+        gas_used: u64,
+        jump_dest: usize,
+        halt: bool,
+    },
+    Revert {
+        reason: Vec<u8>,
+        gas_used: u64,
+    },
+}
 
 pub struct Executor;
 
