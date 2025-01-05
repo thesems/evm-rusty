@@ -219,9 +219,16 @@ impl VM {
 
         match self.execute_operations() {
             Ok(result) => {
-                if let ExecutionResult::Success { return_data, .. } = result.clone() {
+                if let ExecutionResult::Success { return_data, gas_used, .. } = result.clone() {
                     self.contract()?.borrow_mut().code =
                         Rc::new(return_data.ok_or(VMError::InvalidContractCreationResponse)?);
+                    return Ok(ExecutionResult::Success {
+                        return_data: None,
+                        gas_used,
+                        jump_dest: 0,
+                        halt: true,
+                        new_contract_address: Some(contract_address),
+                    });
                 }
                 Ok(result)
             }
@@ -243,6 +250,7 @@ impl VM {
                 gas_used: 0,
                 jump_dest: offset,
                 halt: false,
+                new_contract_address: None,
             })
         } else {
             Err(VMError::InvalidJumpDest)
@@ -271,6 +279,7 @@ impl VM {
                     gas_used: gas_cost.base,
                     jump_dest: 0,
                     halt: true,
+                    new_contract_address: None,
                 });
             }
             Operation::Add => {
@@ -476,6 +485,7 @@ impl VM {
                     gas_used: gas_cost.base + static_gas + dynamic_gas,
                     jump_dest: 0,
                     halt: false,
+                    new_contract_address: None,
                 });
             }
             Operation::GasPrice => panic!("{}", not_impl_error),
@@ -614,6 +624,7 @@ impl VM {
                     gas_used: gas_cost.base,
                     jump_dest: 0,
                     halt: false,
+                    new_contract_address: None,
                 });
             }
             Operation::DelegateCall => panic!("{}", not_impl_error),
@@ -642,6 +653,7 @@ impl VM {
             gas_used: gas_cost.base,
             jump_dest: 0,
             halt: false,
+            new_contract_address: None,
         })
     }
 }
@@ -702,7 +714,7 @@ mod tests {
             Some(&sender.private_key),
         );
 
-        vm.execute_transaction(tx_create).unwrap();
+        let exec_result = vm.execute_transaction(tx_create).unwrap();
 
         assert_eq!(
             *vm.contract()
@@ -714,28 +726,33 @@ mod tests {
             U256::from(10)
         );
 
-        let contract_address = state.lock().unwrap().contract.keys().next().unwrap().clone();
-        let tx_inc = Transaction::new(
-            contract_address,
-            GWEI_TO_WEI,
-            30000,
-            10000,
-            10000,
-            hash_string_to_u256("inc()").to_be_bytes::<32>()[..4].to_vec(),
-            Some(&sender.private_key),
-        );
+        if let ExecutionResult::Success { new_contract_address, .. } = exec_result {
+            assert!(new_contract_address.is_some());
+            
+            let tx_inc = Transaction::new(
+                new_contract_address.unwrap(),
+                GWEI_TO_WEI,
+                30000,
+                10000,
+                10000,
+                hash_string_to_u256("inc()").to_be_bytes::<32>()[..4].to_vec(),
+                Some(&sender.private_key),
+            );
 
-        vm.execute_transaction(tx_inc).unwrap();
+            vm.execute_transaction(tx_inc).unwrap();
 
-        assert_eq!(
-            *vm.contract()
-                .unwrap()
-                .borrow()
-                .storage
-                .get(&U256::ZERO)
-                .unwrap(),
-            U256::from(11)
-        );
+            assert_eq!(
+                *vm.contract()
+                    .unwrap()
+                    .borrow()
+                    .storage
+                    .get(&U256::ZERO)
+                    .unwrap(),
+                U256::from(11)
+            );
+        } else {
+            panic!("Transaction execution failed");
+        }
     }
 
     #[test]

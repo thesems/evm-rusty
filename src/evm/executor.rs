@@ -5,7 +5,7 @@ use crate::evm::evm::VM;
 use crate::evm::execution_context::ExecutionContext;
 use crate::transaction::errors::TransactionError;
 use crate::transaction::transaction::{Transaction, TRANSACTION_GAS_COST};
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -15,6 +15,7 @@ pub enum ExecutionResult {
         gas_used: u64,
         jump_dest: usize,
         halt: bool,
+        new_contract_address: Option<Address>,
     },
     Revert {
         reason: Vec<u8>,
