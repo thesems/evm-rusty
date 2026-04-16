@@ -325,7 +325,7 @@ impl Operation {
             }, // Can be 20k for new value
 
             // Memory operations have dynamic costs based on size
-            Operation::MLoad | Operation::MStore => GasCost {
+            Operation::MLoad | Operation::MStore | Operation::MStore8 => GasCost {
                 base: 3,
                 dynamic_multiplier: 3,
             },
@@ -453,7 +453,7 @@ impl Operation {
                 stack_outputs: 0,
             },
 
-            Operation::IsZero | Operation::SLoad => StackReq {
+            Operation::IsZero | Operation::SLoad | Operation::MLoad => StackReq {
                 min_stack_height: 1,
                 stack_inputs: 1,
                 stack_outputs: 1,

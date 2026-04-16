@@ -69,13 +69,12 @@ mod tests {
         let eth_wallet_receiver = Wallet::generate();
 
         let state_arc = Arc::new(Mutex::new(State::new()));
-        let mut state = state_arc.lock().unwrap();
-
         {
+            let mut state = state_arc.lock().unwrap();
+
             assert!(state.get_account(&eth_wallet_receiver.address).is_none());
             assert!(state.get_account(&eth_wallet_sender.address).is_none());
-        }
-        {
+
             state.set_account(eth_wallet_sender.address, Account::default());
             let sender = state.get_account(&eth_wallet_sender.address).unwrap();
 
@@ -96,14 +95,9 @@ mod tests {
         let base_fee = 10;
         Executor::process_transaction(&tx, base_fee, state_arc.clone()).unwrap();
 
-        let sender_balance = state
-            .get_account(&eth_wallet_sender.address)
-            .unwrap()
-            .balance;
-        let recv_balance = state
-            .get_account(&eth_wallet_receiver.address)
-            .unwrap()
-            .balance;
+        let mut state = state_arc.lock().unwrap();
+        let sender_balance = state.get_account(&eth_wallet_sender.address).unwrap().balance;
+        let recv_balance = state.get_account(&eth_wallet_receiver.address).unwrap().balance;
         let sender_nonce = state.get_account(&eth_wallet_sender.address).unwrap().nonce;
 
         assert_eq!(sender_nonce, 1);

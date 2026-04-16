@@ -506,13 +506,26 @@ impl VM {
             Operation::Pop => {
                 self.stack.pop()?; // Simply discard the value at the top of the stack
             }
-            Operation::MLoad => panic!("{}", not_impl_error),
+            Operation::MLoad => {
+                let offset = self.stack.pop()?.to::<usize>();
+                self.memory.expand_memory(offset, 32, self.gas_available)?;
+
+                let mut value = [0u8; 32];
+                value.copy_from_slice(self.memory.read(offset, 32));
+                self.stack.push(U256::from_be_slice(&value))?;
+            }
             Operation::MStore => {
                 let offset = self.stack.pop()?.to::<usize>();
                 let value = self.stack.pop()?;
                 self.memory.write(offset, value, self.gas_available)?;
             }
-            Operation::MStore8 => panic!("{}", not_impl_error),
+            Operation::MStore8 => {
+                let offset = self.stack.pop()?.to::<usize>();
+                let value = self.stack.pop()?;
+
+                self.memory.expand_memory(offset, 1, self.gas_available)?;
+                self.memory.set(offset, value.to_be_bytes::<32>()[31])?;
+            }
             Operation::SLoad => {
                 let key = self.stack.pop()?; // Get the storage key from the stack
                 let value = self
@@ -799,5 +812,61 @@ mod tests {
             matches!(result, ExecutionResult::Revert { .. }),
             "Expected a revert operation."
         );
+    }
+
+    #[test]
+    fn test_mload_operation() {
+        let code = vec![
+            Operation::Push1(U256::from(0xab)).opcode(), // Value to store
+            0xab,
+            Operation::Push1(U256::from(0)).opcode(), // Memory offset
+            0,
+            Operation::MStore.opcode(),
+            Operation::Push1(U256::from(0)).opcode(), // Memory offset
+            0,
+            Operation::MLoad.opcode(),
+        ];
+
+        let to = Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap();
+        let sender = to.clone();
+
+        let state = Arc::new(Mutex::new(State::new()));
+        state
+            .lock()
+            .unwrap()
+            .set_contract(to, Rc::new(RefCell::new(Contract::new(code))));
+
+        let mut vm = VM::new(ExecutionContext::new(sender, to, 0, vec![], 21000), state).unwrap();
+        vm.execute_operations().unwrap();
+
+        assert_eq!(*vm.stack.top().unwrap(), U256::from(0xab));
+    }
+
+    #[test]
+    fn test_mstore8_operation() {
+        let code = vec![
+            Operation::Push1(U256::from(0xab)).opcode(), // Value to store
+            0xab,
+            Operation::Push1(U256::from(31)).opcode(), // Memory offset
+            31,
+            Operation::MStore8.opcode(),
+            Operation::Push1(U256::from(0)).opcode(), // Memory offset for MLOAD
+            0,
+            Operation::MLoad.opcode(),
+        ];
+
+        let to = Address::from_hex("0x169EE3A023A8D9fF2E0D94cf8220b1Ba40D59794").unwrap();
+        let sender = to.clone();
+
+        let state = Arc::new(Mutex::new(State::new()));
+        state
+            .lock()
+            .unwrap()
+            .set_contract(to, Rc::new(RefCell::new(Contract::new(code))));
+
+        let mut vm = VM::new(ExecutionContext::new(sender, to, 0, vec![], 21000), state).unwrap();
+        vm.execute_operations().unwrap();
+
+        assert_eq!(*vm.stack.top().unwrap(), U256::from(0xab));
     }
 }
