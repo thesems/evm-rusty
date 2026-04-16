@@ -435,6 +435,7 @@ impl Operation {
             | Operation::CodeSize
             | Operation::CallValue
             | Operation::Origin
+            | Operation::Caller
             | Operation::Address => StackReq {
                 min_stack_height: 0,
                 stack_inputs: 0,
@@ -443,6 +444,12 @@ impl Operation {
 
             Operation::CallDataLoad => StackReq {
                 min_stack_height: 0,
+                stack_inputs: 1,
+                stack_outputs: 1,
+            },
+
+            Operation::Balance => StackReq {
+                min_stack_height: 1,
                 stack_inputs: 1,
                 stack_outputs: 1,
             },
@@ -472,6 +479,7 @@ impl Operation {
 
             Operation::Add
             | Operation::Sub
+            | Operation::Not
             | Operation::Mul
             | Operation::Div
             | Operation::SDiv
