@@ -330,6 +330,11 @@ impl Operation {
                 dynamic_multiplier: 3,
             },
 
+            Operation::Keccak256 => GasCost {
+                base: 30,
+                dynamic_multiplier: 6,
+            },
+
             // Push operations
             Operation::Push1(_)
             | Operation::Push2(_)
@@ -506,6 +511,12 @@ impl Operation {
             },
 
             Operation::CodeCopy => StackReq {
+                min_stack_height: 3,
+                stack_inputs: 3,
+                stack_outputs: 0,
+            },
+
+            Operation::CallDataCopy => StackReq {
                 min_stack_height: 3,
                 stack_inputs: 3,
                 stack_outputs: 0,
